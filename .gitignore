@@ -22,4 +22,4 @@ public/dist/
 
 .DS_Store
 
-docs/
+# docs/ (upstream ignored it; we track docs/deploy.md)
