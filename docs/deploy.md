@@ -36,7 +36,7 @@ for s in excalidraw-google-client-id excalidraw-google-client-secret \
          excalidraw-cookie-secret excalidraw-api-token; do
   gcloud secrets create "$s" --replication-policy=user-managed --locations="$REGION" 2>/dev/null || true
 done
-openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add excalidraw-cookie-secret --data-file=-
+openssl rand -hex 16 | tr -d '\n' | gcloud secrets versions add excalidraw-cookie-secret --data-file=-   # 32 raw bytes: oauth2-proxy needs 16/24/32
 openssl rand -hex 32   | tr -d '\n' | gcloud secrets versions add excalidraw-api-token --data-file=-
 # client id/secret: see "Google OAuth" below, then
 #   printf '%s' '<id>'     | gcloud secrets versions add excalidraw-google-client-id --data-file=-
