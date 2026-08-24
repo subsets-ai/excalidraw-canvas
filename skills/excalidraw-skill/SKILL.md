@@ -17,7 +17,7 @@ Three interfaces drive the same live canvas. Pick the first one that applies:
    No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3000` (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g mcp-excalidraw-server`), the shorter alias `excalidraw-canvas <command>` works too.
 3. **REST API** (last resort, e.g. from application code): HTTP endpoints on `http://127.0.0.1:3000` — see `references/cheatsheet.md` for payloads. The server must already be running.
 
-The canvas URL comes from `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`). A canvas server hosts many independent **rooms**; you draw in the one named by `EXCALIDRAW_ROOM` (default `default`) or the global `--room <name>` CLI flag, and humans see it at `<canvas-url>/r/<room>`. Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
+The canvas URL comes from `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`). A canvas server hosts many independent **rooms**; humans see a room at `<canvas-url>/r/<room>`. **Pick the room before drawing**: name it after the task's ticket — for a Linear issue use its id (`pro-2050`) or id + short slug (`pro-2050-wrong-experiment-objective`); otherwise a short descriptive slug. MCP: call `use_room` first (creates it if missing, returns the URL). CLI: pass `--room <name>` on every command (or set `EXCALIDRAW_ROOM`). Share the room URL with the user. Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
 
 ### CLI Quick Reference
 

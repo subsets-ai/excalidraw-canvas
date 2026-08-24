@@ -324,6 +324,66 @@ const convertElementsPreservingImageProps = (
 
 // ─── Room picker (served at "/") ───────────────────────────────────────
 
+const REPO = 'github:subsets-ai/excalidraw-canvas'
+
+function CopyBlock({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* ignore */ }
+  }
+  return (
+    <div className="copy-block">
+      <pre>{text}</pre>
+      <button type="button" className="btn-ghost copy-btn" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+    </div>
+  )
+}
+
+function ConnectGuide({ room }: { room: string }): JSX.Element {
+  const origin = window.location.origin
+  const claudeCode = [
+    'claude mcp add doodle --scope user \\',
+    `  -e EXPRESS_SERVER_URL=${origin} \\`,
+    '  -e EXCALIDRAW_API_TOKEN=<token> \\',
+    `  -e EXCALIDRAW_ROOM=${room} \\`,
+    '  -e EXCALIDRAW_NO_AUTOSTART=1 \\',
+    `  -- npx -y ${REPO}`
+  ].join('\n')
+  const claudeDesktop = JSON.stringify({
+    mcpServers: {
+      doodle: {
+        command: 'npx',
+        args: ['-y', REPO],
+        env: {
+          EXPRESS_SERVER_URL: origin,
+          EXCALIDRAW_API_TOKEN: '<token>',
+          EXCALIDRAW_ROOM: room,
+          EXCALIDRAW_NO_AUTOSTART: '1'
+        }
+      }
+    }
+  }, null, 2)
+  return (
+    <section className="guide">
+      <h2>Connect Claude</h2>
+      <p className="guide-hint">
+        Agents draw in a room; humans open <code>{origin}/r/{room}</code>. Replace <code>&lt;token&gt;</code> with the
+        shared API token: <code>gcloud secrets versions access latest --secret=excalidraw-api-token --project=misc-internal</code>
+      </p>
+      <h3>Claude Code</h3>
+      <CopyBlock text={claudeCode} />
+      <p className="guide-hint">Optional skill (drawing playbook): <code>npx -y {REPO} install-skill</code></p>
+      <h3>Claude Desktop</h3>
+      <p className="guide-hint">Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>, restart Claude.</p>
+      <CopyBlock text={claudeDesktop} />
+    </section>
+  )
+}
+
 function RoomPicker(): JSX.Element {
   const [rooms, setRooms] = useState<RoomSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -356,10 +416,7 @@ function RoomPicker(): JSX.Element {
   return (
     <div className="room-picker">
       <h1>Doodle</h1>
-      <p className="room-picker-hint">
-        Every room is a shared, live canvas. Open one in as many tabs as you like; agents join with
-        <code> --room &lt;name&gt;</code> or <code>EXCALIDRAW_ROOM</code>.
-      </p>
+      <p className="tagline">Self-hosted <a href="https://excalidraw.com" target="_blank" rel="noreferrer">Excalidraw</a> with live shared rooms — you and your agents draw on the same canvas.</p>
       <form className="room-create" onSubmit={submit}>
         <input
           autoFocus
@@ -386,6 +443,7 @@ function RoomPicker(): JSX.Element {
           ))}
         </ul>
       )}
+      <ConnectGuide room={draft.trim().toLowerCase().replace(/\s+/g, '-') || rooms?.[0]?.id || 'my-room'} />
     </div>
   )
 }

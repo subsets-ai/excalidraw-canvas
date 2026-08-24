@@ -3,10 +3,11 @@ import { ServerElement } from '../types.js';
 import {
   EXPRESS_SERVER_URL,
   ENABLE_CANVAS_SYNC,
-  EXCALIDRAW_ROOM,
   EXCALIDRAW_API_TOKEN,
   EXCALIDRAW_AGENT_NAME,
-  ROOM_HEADER
+  ROOM_HEADER,
+  getCurrentRoom,
+  setCurrentRoom
 } from './config.js';
 
 // Every request to the canvas carries the room this process works in, the
@@ -18,7 +19,7 @@ import {
 export function canvasHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     ...(extra ?? {}),
-    [ROOM_HEADER]: EXCALIDRAW_ROOM,
+    [ROOM_HEADER]: getCurrentRoom(),
     'x-excalidraw-agent': EXCALIDRAW_AGENT_NAME
   };
   if (EXCALIDRAW_API_TOKEN) headers['Authorization'] = `Bearer ${EXCALIDRAW_API_TOKEN}`;
@@ -291,6 +292,37 @@ export async function batchCreateElementsStrict(elements: ServerElement[]): Prom
     body: JSON.stringify({ elements })
   });
   return data.elements || [];
+}
+
+// ---- Rooms ----
+
+export interface RoomSummary {
+  id: string;
+  elementCount: number;
+  clients: number;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+export function roomUrl(id: string = getCurrentRoom()): string {
+  return `${EXPRESS_SERVER_URL.replace(/\/$/, '')}/r/${encodeURIComponent(id)}`;
+}
+
+export async function listRooms(): Promise<RoomSummary[]> {
+  const data = await requestJson<{ rooms?: RoomSummary[] }>('/api/rooms');
+  return data.rooms || [];
+}
+
+// Create the room if needed and make it this process's current room.
+export async function useRoom(id: string): Promise<{ room: RoomSummary; created: boolean; url: string }> {
+  const normalized = setCurrentRoom(id);
+  const data = await requestJson<{ room: RoomSummary; created: boolean }>('/api/rooms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: normalized })
+  });
+  return { room: data.room, created: data.created, url: roomUrl(normalized) };
 }
 
 // Identity marker the canvas server puts in /health (v1.1+)

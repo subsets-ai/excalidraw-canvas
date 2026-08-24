@@ -35,6 +35,34 @@ if (roomFromEnv === null) {
 }
 export const EXCALIDRAW_ROOM: string = roomFromEnv;
 
+// The room this process draws in. Starts from EXCALIDRAW_ROOM / --room and
+// can be switched at runtime (MCP `use_room`), so an agent can open a room
+// per task — e.g. named after the Linear issue it's working on.
+let currentRoom: string = roomFromEnv;
+export function getCurrentRoom(): string {
+  return currentRoom;
+}
+export function setCurrentRoom(id: string): string {
+  const normalized = normalizeRoomId(id);
+  if (normalized === null) {
+    throw new Error(`Invalid room "${id}": use 1-64 chars of a-z, 0-9, "-" or "_" (e.g. "pro-2050").`);
+  }
+  currentRoom = normalized;
+  return currentRoom;
+}
+
+// Turn a free-form title into a room id: "PRO-2050 Experiments launched…" ->
+// "pro-2050-experiments-launched". Keeps a leading ticket id intact.
+export function slugifyRoomId(title: string, maxLength = 64): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLength)
+    .replace(/-+$/g, '');
+  return slug || DEFAULT_ROOM_ID;
+}
+
 // Optional bearer token sent with every canvas request. The canvas server
 // itself does not check it — it's for the auth layer in front of a shared,
 // self-hosted canvas (see docs/deploy.md).

@@ -275,6 +275,18 @@ try {
     { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1', EXCALIDRAW_ROOM: 'gamma' }, encoding: 'utf-8' });
   check(cliEnv.status === 0 && cliEnv.stdout.includes('cli1'), 'EXCALIDRAW_ROOM env selects room');
 
+  // rooms CLI: slugified create + list marks current
+  const rc = spawnSync(process.execPath, [binPath, '--url', base, 'rooms', 'create', 'PRO-2050 Wrong experiment objective'],
+    { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  const rcOut = rc.status === 0 ? JSON.parse(rc.stdout) : {};
+  eq(rcOut.room?.id, 'pro-2050-wrong-experiment-objective', `rooms create slugifies ${rc.stderr.trim().slice(0, 120)}`);
+  check(rcOut.url?.endsWith('/r/pro-2050-wrong-experiment-objective'), 'rooms create returns the room URL');
+  const rl = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'gamma', 'rooms'],
+    { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  const rlOut = rl.status === 0 ? JSON.parse(rl.stdout) : {};
+  eq(rlOut.current, 'gamma', 'rooms list reports current room');
+  check((rlOut.rooms || []).some(r => r.id === 'pro-2050-wrong-experiment-objective'), 'rooms list includes created room');
+
   // ---- persistence across restart
   console.log('persistence');
   await new Promise(r => setTimeout(r, 500)); // let the debounced save land
