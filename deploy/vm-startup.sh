@@ -131,7 +131,7 @@ ExecStart=/usr/bin/docker run --name excalidraw-canvas --rm --init \
   --network excalidraw \
   --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp \
   -e DATA_DIR=/data -e PORT=3000 -e HOST=0.0.0.0 -e LOG_LEVEL=info \
-  -e NODE_ENV=production -e PUBLIC_ORIGIN=https://${DOMAIN} \
+  -e NODE_ENV=production -e PUBLIC_ORIGIN=https://${DOMAIN} -e LOG_FILE_PATH=/tmp/excalidraw.log \
   -v /mnt/disks/data:/data \
   -p 127.0.0.1:3000:3000 \
   ${IMAGE}
