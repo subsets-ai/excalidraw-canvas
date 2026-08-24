@@ -1,8 +1,9 @@
 import { parseArgs } from '../args.js';
 import { printJson, note } from '../util.js';
 import { ensureCanvasRunning, stopCanvas, canvasPort, isCanvasHealth, foreignServiceError } from '../../core/spawn.js';
-import { getHealth, getSyncStatus } from '../../core/canvas-client.js';
-import { EXPRESS_SERVER_URL } from '../../core/config.js';
+import { getHealth, getSyncStatus, listRooms, useRoom, roomUrl } from '../../core/canvas-client.js';
+import { EXPRESS_SERVER_URL, getCurrentRoom, slugifyRoomId, ROOM_ID_PATTERN } from '../../core/config.js';
+import { CliUsageError } from '../args.js';
 import { readPidFile } from '../../core/pidfile.js';
 
 export async function start(argv: string[]): Promise<void> {
@@ -69,4 +70,28 @@ export async function status(argv: string[]): Promise<void> {
     browserClients: health.websocket_clients,
     ...sync
   });
+}
+
+// rooms            -> list rooms (current one marked)
+// rooms create <x> -> create (or touch) a room; free text is slugified
+export async function rooms(argv: string[]): Promise<void> {
+  const [sub, ...rest] = argv;
+  if (sub === undefined) {
+    parseArgs(argv, {});
+    await ensureCanvasRunning();
+    const list = await listRooms();
+    const current = getCurrentRoom();
+    printJson({ current, url: roomUrl(current), rooms: list.map(r => ({ ...r, current: r.id === current })) });
+    return;
+  }
+  if (sub === 'create') {
+    const wanted = rest.join(' ').trim();
+    if (!wanted) throw new CliUsageError('Usage: rooms create <name>');
+    const id = ROOM_ID_PATTERN.test(wanted.toLowerCase()) ? wanted.toLowerCase() : slugifyRoomId(wanted);
+    await ensureCanvasRunning();
+    const result = await useRoom(id);
+    printJson({ room: result.room, created: result.created, url: result.url });
+    return;
+  }
+  throw new CliUsageError(`Unknown rooms subcommand "${sub}". Usage: rooms | rooms create <name>`);
 }

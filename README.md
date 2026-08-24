@@ -10,7 +10,7 @@
 One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y mcp-excalidraw-server <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
-- **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...). Speaks MCP `2026-07-28` (`server/discover`, per-request `_meta` envelope, tool calls without a handshake) and stays compatible with 2025-era clients that open with `initialize`.
+- **MCP Server** — 28 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...). Speaks MCP `2026-07-28` (`server/discover`, per-request `_meta` envelope, tool calls without a handshake) and stays compatible with 2025-era clients that open with `initialize`.
 - **REST API** — plain HTTP for LangChain and custom frameworks.
 
 Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
@@ -37,7 +37,7 @@ Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Merma
   - [Codex CLI](#codex-cli)
   - [OpenCode](#opencode)
   - [Antigravity (Google)](#antigravity-google)
-- [MCP Tools (26 Total)](#mcp-tools-26-total)
+- [MCP Tools (28 Total)](#mcp-tools-28-total)
 - [Quick Start (From Source / Docker)](#quick-start-from-source--docker)
 - [Testing](#testing)
 - [FAQ](#faq)
@@ -63,7 +63,7 @@ Excalidraw has an [official MCP](https://github.com/excalidraw/excalidraw-mcp) �
 
 | | Official Excalidraw MCP | This Project |
 |---|---|---|
-| **Approach** | Prompt in, diagram out (one-shot widget) | Programmatic element-level control (CLI + 26 MCP tools) |
+| **Approach** | Prompt in, diagram out (one-shot widget) | Programmatic element-level control (CLI + 28 MCP tools) |
 | **State** | Checkpoints inside the chat widget | Persistent live canvas with real-time sync |
 | **Element CRUD** | Declarative re-send with delete markers | Full create / read / update / delete per element |
 | **AI sees the canvas** | No | `describe` (structured text) + `screenshot` (image) |
@@ -211,6 +211,7 @@ Conventions: JSON results on stdout — except `describe` (plain text by design)
 | Command | Description |
 |---------|-------------|
 | `start` / `stop` / `status` | Manage the canvas server (detached; `stop` identity-checks the live server via `/health` before signaling) |
+| `rooms` / `rooms create <name>` | List rooms / create one (free text is slugified: `PRO-2050 Wrong objective` → `pro-2050-wrong-objective`) |
 | `add [file\|-]` | Batch-create elements from a JSON array (file or stdin); `--one '{...}'` for a single element |
 | `apply [file\|-]` | One-call multi-op patch: `{"create":[...],"update":[{"id":"a","set":{...}}],"delete":["id"]}` |
 | `get <id>` / `delete <id...>` | Read / remove elements |
@@ -436,7 +437,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 - **Docker networking**: Use `host.docker.internal` to reach the canvas server running on your host machine. On Linux, you may need `--add-host=host.docker.internal:host-gateway` or use `172.17.0.1`. The Docker MCP image sets `EXCALIDRAW_NO_AUTOSTART=1` (it has no frontend build) — run the canvas as its own container.
 - **Storage**: The canvas server keeps rooms in memory unless `DATA_DIR` is set, in which case each room is persisted to `DATA_DIR/rooms/<room>.json`. Without it, restarting clears all elements — use `export` / `snapshot`.
 
-## MCP Tools (26 Total)
+## MCP Tools (28 Total)
 
 | Category | Tools |
 |---|---|
@@ -444,6 +445,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 | **Layout** | `align_elements`, `distribute_elements`, `group_elements`, `ungroup_elements`, `lock_elements`, `unlock_elements` |
 | **Scene Awareness** | `describe_scene`, `get_canvas_screenshot` |
 | **File I/O** | `export_scene`, `import_scene`, `export_to_image`, `export_to_excalidraw_url`, `create_from_mermaid` |
+| **Rooms** | `use_room` (switch/create — name it after the ticket, e.g. `pro-2050`), `list_rooms` |
 | **State Management** | `clear_canvas`, `snapshot_scene`, `restore_snapshot` |
 | **Viewport** | `set_viewport` |
 | **Design Guide** | `read_diagram_guide` |

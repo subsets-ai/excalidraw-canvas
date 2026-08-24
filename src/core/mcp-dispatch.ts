@@ -7,7 +7,7 @@ import {
   ServerElement,
   ExcalidrawElementType
 } from '../types.js';
-import { EXPRESS_SERVER_URL } from './config.js';
+import { EXPRESS_SERVER_URL, getCurrentRoom, slugifyRoomId, ROOM_ID_PATTERN } from './config.js';
 import {
   updateElementOnCanvas,
   deleteElementOnCanvas,
@@ -22,7 +22,10 @@ import {
   saveSnapshot,
   getSnapshot,
   sendMermaid,
-  ApiResponse
+  ApiResponse,
+  listRooms,
+  useRoom,
+  roomUrl
 } from './canvas-client.js';
 import { sanitizeFilePath, prepareElement, prepareElementUpdate } from './normalize.js';
 import {
@@ -572,6 +575,35 @@ export async function callExcalidrawTool(
           }]
         };
       }
+      case 'use_room': {
+        const params = z.object({ room: z.string().min(1) }).parse(args);
+        const wanted = params.room.trim();
+        const id = ROOM_ID_PATTERN.test(wanted.toLowerCase()) ? wanted.toLowerCase() : slugifyRoomId(wanted);
+        const result = await useRoom(id);
+        logger.info('Switched room via MCP', { room: id, created: result.created });
+        return {
+          content: [{
+            type: 'text',
+            text: `${result.created ? 'Created' : 'Joined'} room "${id}" (${result.room.elementCount} elements, ${result.room.clients} online).\n` +
+              `Open it here: ${result.url}\n\n${JSON.stringify(result.room, null, 2)}`
+          }]
+        };
+      }
+
+      case 'list_rooms': {
+        const rooms = await listRooms();
+        const current = getCurrentRoom();
+        const lines = rooms.map(r =>
+          `${r.id === current ? '* ' : '  '}${r.id} — ${r.elementCount} elements, ${r.clients} online, updated ${r.updatedAt}${r.error ? ` (unreadable: ${r.error})` : ''}`
+        );
+        return {
+          content: [{
+            type: 'text',
+            text: `Current room: ${current} (${roomUrl(current)})\n\nRooms (${rooms.length}):\n${lines.join('\n') || '  (none)'}`
+          }]
+        };
+      }
+
       case 'snapshot_scene': {
         const params = z.object({ name: z.string() }).parse(args);
         logger.info('Saving snapshot via MCP', { name: params.name });

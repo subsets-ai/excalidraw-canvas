@@ -4,6 +4,25 @@ import { EXCALIDRAW_ELEMENT_TYPES } from '../types.js';
 // Tool definitions
 export const tools: Tool[] = [
   {
+    name: 'use_room',
+    description: 'Switch this session to a room (a separate live canvas), creating it if needed. Do this FIRST when starting a diagram for a task: name the room after the ticket — for a Linear issue use its id, e.g. "pro-2050", or id + short title slug, e.g. "pro-2050-wrong-experiment-objective". Then share the returned URL so humans can open the same canvas. Without this, everything lands in the default room.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: {
+          type: 'string',
+          description: 'Room id: 1-64 chars of a-z, 0-9, "-", "_". Free text is slugified ("PRO-2050 Wrong objective" -> "pro-2050-wrong-objective").'
+        }
+      },
+      required: ['room']
+    }
+  },
+  {
+    name: 'list_rooms',
+    description: 'List rooms on the canvas server (id, element count, people online, last update) and which one this session is using.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'create_element',
     description: 'Create a new Excalidraw element. For arrows, use startElementId/endElementId to bind to shapes (auto-routes to edges).',
     inputSchema: {
