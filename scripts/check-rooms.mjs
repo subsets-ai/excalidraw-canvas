@@ -25,10 +25,10 @@ function check(cond, msg) {
 }
 function eq(a, b, msg) { check(JSON.stringify(a) === JSON.stringify(b), `${msg} (${JSON.stringify(a)} == ${JSON.stringify(b)})`); }
 
-function startServer() {
+function startServer(extraEnv = {}) {
   const child = spawn(process.execPath, [serverPath], {
     cwd: repoRoot,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, LOG_LEVEL: 'error' },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, LOG_LEVEL: 'error', ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr.on('data', d => process.stderr.write(d));
@@ -59,9 +59,9 @@ async function api(room, path, init = {}) {
   return { status: r.status, body };
 }
 
-function connectWs(room, name) {
+function connectWs(room, name, origin) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=${room}&name=${encodeURIComponent(name)}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=${room}&name=${encodeURIComponent(name)}`, origin ? { origin } : {});
     const inbox = [];
     const waiters = [];
     ws.on('message', raw => {
@@ -276,6 +276,24 @@ try {
   check(!existsSync(join(dataDir, 'rooms', 'gamma.json')), 'room file removed');
   r = await api(null, '/api/rooms/default', { method: 'DELETE' });
   eq(r.status, 400, 'default room protected');
+
+  // ---- origin allowlist (PUBLIC_ORIGIN) on WebSocket upgrades
+  console.log('origin');
+  await stopServer(server);
+  server = startServer({ PUBLIC_ORIGIN: 'https://draw.example.test', NODE_ENV: 'production' });
+  await waitHealthy();
+  const good = await connectWs('alpha', 'Ok', 'https://draw.example.test');
+  await good.next(m => m.type === 'welcome', 'welcome (allowed origin)');
+  good.close();
+  const noOrigin = await connectWs('alpha', 'Cli');
+  await noOrigin.next(m => m.type === 'welcome', 'welcome (no origin header)');
+  noOrigin.close();
+  const bad = await connectWs('alpha', 'Evil', 'https://evil.example').then(() => 'connected', err => err.message);
+  check(bad !== 'connected', `cross-origin upgrade rejected (${bad})`);
+  r = await fetch(`${base}/api/rooms`, { headers: { origin: 'https://evil.example' } });
+  check(!r.headers.get('access-control-allow-origin'), 'no wildcard CORS in production');
+  r = await fetch(`${base}/server.js`);
+  eq(r.status, 404, 'compiled backend not served');
 } catch (error) {
   failures++;
   console.error('ERROR', error);

@@ -56,19 +56,37 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+
+// Browsers must come from our own origin(s): a logged-in user's session
+// cookie would otherwise ride along on a cross-site WebSocket handshake from
+// any web page (Safari/Firefox don't default cookies to SameSite=Lax) and
+// leak the whole room. PUBLIC_ORIGIN is a comma-separated allowlist of
+// origins (e.g. https://draw.subsets.com); unset = allow all (local dev).
+const allowedOrigins = new Set(
+  (process.env.PUBLIC_ORIGIN || '').split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean)
+);
+function originAllowed(origin: string | undefined): boolean {
+  if (allowedOrigins.size === 0) return true;
+  if (!origin) return true; // non-browser clients (no Origin header)
+  return allowedOrigins.has(origin.replace(/\/$/, ''));
+}
+const wss = new WebSocketServer({
+  server,
+  verifyClient: ({ origin }: { origin?: string }) => originAllowed(origin)
+});
 
 // Optional on-disk persistence for rooms (see core/rooms.ts)
 configurePersistence(process.env.DATA_DIR);
 
-// Middleware
-app.use(cors());
+// Middleware. Wildcard CORS only outside production: nothing legitimate is
+// cross-origin (browsers are same-origin, MCP/CLI aren't browsers), and on
+// a cookie-authenticated public host it would only widen the CSRF surface.
+if (process.env.NODE_ENV !== 'production') {
+  app.use(cors());
+}
 app.use(express.json({ limit: '10mb' }));
 
-// Serve static files from the build directory
-const staticDir = path.join(__dirname, '../dist');
-app.use(express.static(staticDir));
-// Also serve frontend assets
+// Serve only the built frontend (never the compiled backend in dist/)
 app.use(express.static(path.join(__dirname, '../dist/frontend')));
 // Serve Excalidraw fonts so the font subsetting worker can fetch them for export
 app.use('/assets/fonts', express.static(
@@ -226,7 +244,15 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     ws.close(1008, 'invalid room id');
     return;
   }
-  const room = getRoom(roomId);
+  let room: Room;
+  try {
+    room = getRoom(roomId);
+  } catch (error) {
+    // Unreadable room file must not take the whole process down
+    logger.error(`WebSocket join refused for room "${roomId}":`, error);
+    ws.close(1011, 'room unavailable');
+    return;
+  }
   const clientId = generateId();
   room.clients.set(ws, clientId);
   const me: Collaborator = { clientId, username: name, color: colorFor(clientId) };
@@ -1083,6 +1109,21 @@ function acceptsIncoming(existing: ServerElement | undefined, incoming: ServerEl
   return inn <= en;
 }
 
+// Browser elements are stored as-is (they're Excalidraw's own objects), but
+// bounded: a well-formed identity, a sane key count, and a size cap per
+// element so a tab can't stuff arbitrary blobs into the room file.
+const MAX_RECONCILE_ELEMENTS = 5000;
+const MAX_ELEMENT_BYTES = 512 * 1024;
+const ReconcileElementSchema = z.object({
+  id: z.string().min(1).max(128),
+  type: z.string().min(1).max(32),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  version: z.number().int().nonnegative().optional(),
+  versionNonce: z.number().int().optional(),
+  isDeleted: z.boolean().optional()
+}).passthrough().refine(obj => Object.keys(obj).length <= 200, { message: 'too many keys' });
+
 app.post('/api/elements/reconcile', (req: Request, res: Response) => {
   try {
     const room = req.room;
@@ -1095,11 +1136,19 @@ app.post('/api/elements/reconcile', (req: Request, res: Response) => {
       });
     }
 
+    if (incomingElements.length > MAX_RECONCILE_ELEMENTS) {
+      return res.status(413).json({
+        success: false,
+        error: `Too many elements in one reconcile (${incomingElements.length} > ${MAX_RECONCILE_ELEMENTS})`
+      });
+    }
+
     const accepted: ServerElement[] = [];
     const rejected: ServerElement[] = [];
 
     for (const raw of incomingElements as any[]) {
-      if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || typeof raw.type !== 'string') continue;
+      if (!ReconcileElementSchema.safeParse(raw).success) continue;
+      if (JSON.stringify(raw).length > MAX_ELEMENT_BYTES) continue;
       const existing = room.elements.get(raw.id);
       // Deleting something we never had is a no-op
       if (!existing && raw.isDeleted) continue;
@@ -1153,6 +1202,8 @@ app.post('/api/elements/reconcile', (req: Request, res: Response) => {
 });
 
 // ─── Files API (for image elements) ───────────────────────────
+// Every image is rewritten into the room file on each save; keep them sane.
+const MAX_FILE_DATAURL_BYTES = 5 * 1024 * 1024;
 app.get('/api/files', (req: Request, res: Response) => {
   res.json({ files: filesObject(req.room) });
 });
@@ -1162,6 +1213,10 @@ app.post('/api/files', (req: Request, res: Response) => {
   const body = req.body;
   const fileList: ExcalidrawFile[] = Array.isArray(body) ? body : (body?.files || []);
   for (const f of fileList) {
+    if (typeof f?.id !== 'string' || typeof f?.dataURL !== 'string') continue;
+    if (f.id.length > 128 || f.dataURL.length > MAX_FILE_DATAURL_BYTES) {
+      return res.status(413).json({ success: false, error: `File ${f.id} exceeds ${MAX_FILE_DATAURL_BYTES} bytes` });
+    }
     if (f.id && f.dataURL) {
       room.files.set(f.id, { id: f.id, dataURL: f.dataURL, mimeType: f.mimeType || 'image/png', created: f.created || Date.now() });
     }

@@ -566,8 +566,6 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
       .then(() => remeasureText())
       .catch(() => { /* ignore */ })
   }
-  ;(window as any).__remeasure = remeasureText
-
   useEffect(() => {
     if (!excalidrawAPI || typeof document === 'undefined' || !document.fonts) return
     const onFonts = (): void => { setTimeout(remeasureText, 0) }
@@ -1057,11 +1055,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
 
       <div className="canvas-container">
         <Excalidraw
-          excalidrawAPI={(api: ExcalidrawAPIRefValue) => {
-            // Debug aid: `window.__excalidrawAPI` in devtools
-            ;(window as any).__excalidrawAPI = api
-            setExcalidrawAPI(api)
-          }}
+          excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
           isCollaborating={true}
           onPointerUpdate={onPointerUpdate}
           onChange={(_elements, appState) => {

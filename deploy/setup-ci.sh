@@ -1,6 +1,9 @@
 #!/bin/bash
-# One-time setup for GitHub Actions deploys (mirrors neml-e/deploy/setup-ci.sh).
-# Idempotent. Needs admin creds on misc-internal.
+# One-time setup for GitHub Actions deploys (mirrors neml-e/deploy/setup-ci.sh,
+# with the deploy identity scoped down: only pushes from refs/heads/main can
+# assume it, and it can only ssh/sudo into THIS instance, not every VM in the
+# project). Idempotent. Needs admin creds on misc-internal. Run after the VM
+# exists (docs/deploy.md one-time setup).
 set -euo pipefail
 
 P=misc-internal
@@ -8,32 +11,49 @@ ZONE=europe-west1-b
 VM=excalidraw-canvas
 REPO=subsets-ai/excalidraw-canvas
 SA=excalidraw-deploy@$P.iam.gserviceaccount.com
+VM_SA=excalidraw-vm@$P.iam.gserviceaccount.com
 NUM=$(gcloud projects describe $P --format='value(projectNumber)')
 IMAGE=europe-west1-docker.pkg.dev/$P/excalidraw-canvas/canvas
+POOL=excalidraw-github
 
-# GitHub OIDC -> GCP, pinned to this repo
-gcloud iam workload-identity-pools create excalidraw-github --location=global --project=$P 2>/dev/null || true
+# GitHub OIDC -> GCP, pinned to this repo AND the main branch: a workflow on
+# any other branch can request id-token:write too, so repository alone is not
+# enough.
+COND="assertion.repository == \"$REPO\" && assertion.ref == \"refs/heads/main\""
+MAPPING='google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref'
+gcloud iam workload-identity-pools create $POOL --location=global --project=$P 2>/dev/null || true
 gcloud iam workload-identity-pools providers create-oidc github \
-  --location=global --workload-identity-pool=excalidraw-github --project=$P \
+  --location=global --workload-identity-pool=$POOL --project=$P \
   --issuer-uri=https://token.actions.githubusercontent.com \
-  --attribute-mapping='google.subject=assertion.sub,attribute.repository=assertion.repository' \
-  --attribute-condition="assertion.repository == \"$REPO\"" 2>/dev/null || true
+  --attribute-mapping="$MAPPING" --attribute-condition="$COND" 2>/dev/null ||
+gcloud iam workload-identity-pools providers update-oidc github \
+  --location=global --workload-identity-pool=$POOL --project=$P \
+  --attribute-mapping="$MAPPING" --attribute-condition="$COND"
 
 gcloud iam service-accounts create excalidraw-deploy \
   --display-name='GitHub Actions deployer (excalidraw-canvas)' --project=$P 2>/dev/null || true
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$P \
   --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/projects/$NUM/locations/global/workloadIdentityPools/excalidraw-github/attribute.repository/$REPO" \
+  --member="principalSet://iam.googleapis.com/projects/$NUM/locations/global/workloadIdentityPools/$POOL/attribute.repository/$REPO" \
   >/dev/null
 
-# push image + IAP ssh + `sudo systemctl restart` on the VM
-for r in artifactregistry.writer compute.viewer compute.osAdminLogin iap.tunnelResourceAccessor; do
-  gcloud projects add-iam-policy-binding $P --role=roles/$r \
-    --member=serviceAccount:$SA --condition=None -q >/dev/null
+# Push images: writer on this repository only
+gcloud artifacts repositories add-iam-policy-binding excalidraw-canvas \
+  --location=europe-west1 --project=$P \
+  --role=roles/artifactregistry.writer --member=serviceAccount:$SA >/dev/null
+
+# `gcloud compute ssh --tunnel-through-iap` + `sudo systemctl restart` on this
+# instance only. compute.viewer stays project-wide (needed to resolve the
+# instance); the root-equivalent roles are bound on the instance.
+gcloud projects add-iam-policy-binding $P --role=roles/compute.viewer \
+  --member=serviceAccount:$SA --condition=None -q >/dev/null
+for r in compute.osAdminLogin iap.tunnelResourceAccessor; do
+  gcloud compute instances add-iam-policy-binding $VM --zone=$ZONE --project=$P \
+    --role=roles/$r --member=serviceAccount:$SA >/dev/null
 done
 
-# SSH to a VM running as the default compute SA requires actAs on it
-gcloud iam service-accounts add-iam-policy-binding $NUM-compute@developer.gserviceaccount.com \
+# SSH to a VM running as excalidraw-vm requires actAs on that SA
+gcloud iam service-accounts add-iam-policy-binding $VM_SA \
   --project=$P --role=roles/iam.serviceAccountUser --member=serviceAccount:$SA >/dev/null
 
 # deploy SA logs in via OS Login
@@ -41,5 +61,5 @@ gcloud compute instances add-metadata $VM --zone=$ZONE --project=$P \
   --metadata=enable-oslogin=TRUE
 
 echo "done - set repo vars GCP_PROJECT_ID=$P and"
-echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/$NUM/locations/global/workloadIdentityPools/excalidraw-github/providers/github"
+echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/$NUM/locations/global/workloadIdentityPools/$POOL/providers/github"
 echo "image: $IMAGE:latest"

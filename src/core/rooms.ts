@@ -111,12 +111,29 @@ function loadRoomFromDisk(id: string): Room | null {
   }
 }
 
+// Any authenticated principal can name a room into existence (URL, WS,
+// /health?room=). Keep the in-memory set bounded by evicting rooms that are
+// empty, unwatched and not on disk.
+const MAX_IN_MEMORY_ROOMS = 500;
+function evictIdleRooms(): void {
+  if (rooms.size <= MAX_IN_MEMORY_ROOMS) return;
+  for (const [id, room] of rooms) {
+    if (room.clients.size === 0 && room.elements.size === 0 && !room.dirty &&
+        !(dataDir && fs.existsSync(roomFilePath(id)))) {
+      rooms.delete(id);
+      if (rooms.size <= MAX_IN_MEMORY_ROOMS) break;
+    }
+  }
+}
+
 // Get (or lazily create/load) a room. Ids are validated by the caller.
+// Throws if the room's file on disk is unreadable (never shadow it).
 export function getRoom(id: string = DEFAULT_ROOM_ID): Room {
   let room = rooms.get(id);
   if (room) return room;
   room = loadRoomFromDisk(id) ?? newRoom(id);
   rooms.set(id, room);
+  evictIdleRooms();
   return room;
 }
 
@@ -131,6 +148,8 @@ export interface RoomSummary {
   clients: number;
   createdAt: string;
   updatedAt: string;
+  // Set when the room's file on disk could not be read
+  error?: string;
 }
 
 export function summarizeRoom(room: Room): RoomSummary {
@@ -158,7 +177,14 @@ export function listRooms(): RoomSummary[] {
       }
     }
   }
-  return Array.from(ids).sort().map(id => summarizeRoom(getRoom(id)));
+  return Array.from(ids).sort().map(id => {
+    try {
+      return summarizeRoom(getRoom(id));
+    } catch (error) {
+      // One corrupt file must not take the room list (and the picker) down
+      return { id, elementCount: 0, clients: 0, createdAt: '', updatedAt: '', error: (error as Error).message };
+    }
+  });
 }
 
 export function deleteRoom(id: string): boolean {

@@ -6,13 +6,16 @@
 # Layout on the box (all localhost-bound; Caddy is the only public listener):
 #   caddy :443  --bearer token--> canvas :3000
 #              --otherwise------> oauth2-proxy :4180 --Google login--> canvas :3000
+# Both containers sit on a private docker network with the GCE metadata
+# server firewalled off, so an app compromise cannot mint VM credentials.
 set -uxo pipefail
 exec > /var/log/excalidraw-startup.log 2>&1
 
 META="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 IMAGE=$(curl -s -H "Metadata-Flavor: Google" "$META/image-ref")
 DOMAIN=$(curl -s -H "Metadata-Flavor: Google" "$META/domain")
-OAUTH2_PROXY_IMAGE=quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+# Pinned by digest; bump deliberately.
+OAUTH2_PROXY_IMAGE=quay.io/oauth2-proxy/oauth2-proxy:v7.7.1@sha256:f6a4aa83a27e316114bf79664302b1ffb2cc8ce697fb479273af4feb3fb16fe3
 
 # 1. Mount the dedicated data disk (holds rooms/*.json).
 DISK=/dev/disk/by-id/google-excalidraw-canvas-data
@@ -43,10 +46,15 @@ if ! command -v caddy >/dev/null; then
   apt-get update && apt-get install -y caddy
 fi
 
-# 3. Let root's docker authenticate to Artifact Registry via the VM service account.
+# 3. Containers never talk to the GCE metadata server: the VM's service
+# account is for the host (secret fetch, image pull), not for the app.
+docker network inspect excalidraw >/dev/null 2>&1 || docker network create excalidraw
+iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+
+# 4. Let root's docker authenticate to Artifact Registry via the VM service account.
 gcloud auth configure-docker europe-west1-docker.pkg.dev -q
 
-# 4. Env sync: lift the env->secret mapping out of the deployed image so it
+# 5. Env sync: lift the env->secret mapping out of the deployed image so it
 # always matches the running code (deploy/excalidraw-env.sh in the repo).
 cat > /usr/local/bin/excalidraw-sync-env.sh <<'EOS'
 #!/bin/sh
@@ -54,42 +62,49 @@ set -e
 . /etc/excalidraw.image
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
-docker run --rm --entrypoint cat "$IMAGE" /app/deploy/excalidraw-env.sh > "$TMP"
+docker run --rm --network none --entrypoint cat "$IMAGE" /app/deploy/excalidraw-env.sh > "$TMP"
 [ -s "$TMP" ]
 install -m 700 "$TMP" /usr/local/bin/excalidraw-env.sh
 EOS
 chmod +x /usr/local/bin/excalidraw-sync-env.sh
 
-# 5. Render the Caddyfile from the env file: the bearer token has to be a
-# literal in the matcher. Root-only file; regenerated on every unit start.
-cat > /usr/local/bin/excalidraw-render-caddy.sh <<EOS
-#!/bin/sh
-set -e
-. /run/excalidraw.env
-umask 027
-cat > /etc/caddy/Caddyfile <<EOC
+echo "IMAGE=$IMAGE" > /etc/excalidraw.image
+echo "DOMAIN=$DOMAIN" >> /etc/excalidraw.image
+
+# 6. Caddy. The bearer token is read from the environment (systemd drop-in
+# below), never written into the Caddyfile. On the bearer path the identity
+# headers oauth2-proxy would set are stripped, so the canvas can trust
+# X-Forwarded-Email on both paths.
+cat > /etc/caddy/Caddyfile <<EOS
 $DOMAIN {
 	# MCP server / CLI: bearer token, no browser session
-	@token header Authorization "Bearer \$API_TOKEN"
+	@token header Authorization "Bearer {env.API_TOKEN}"
 	handle @token {
-		reverse_proxy 127.0.0.1:3000
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -X-Forwarded-Email
+			header_up -X-Forwarded-User
+			header_up -X-Forwarded-Groups
+			header_up -X-Forwarded-Preferred-Username
+			header_up -X-Forwarded-Access-Token
+		}
 	}
 	# Everyone else: Google login via oauth2-proxy, which proxies to the canvas
 	handle {
 		reverse_proxy 127.0.0.1:4180
 	}
 }
-EOC
-chgrp caddy /etc/caddy/Caddyfile
-systemctl reload caddy || systemctl restart caddy
 EOS
-chmod +x /usr/local/bin/excalidraw-render-caddy.sh
+mkdir -p /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/excalidraw.conf <<'EOS'
+[Service]
+# Rendered by excalidraw-canvas.service before it (re)starts caddy; tolerate
+# absence on first boot so caddy still comes up.
+EnvironmentFile=-/run/excalidraw-caddy.env
+EOS
 
-echo "IMAGE=$IMAGE" > /etc/excalidraw.image
-echo "DOMAIN=$DOMAIN" >> /etc/excalidraw.image
-
-# 6. systemd units. The canvas unit owns env rendering; the auth unit and
-# Caddy follow it.
+# 7. systemd units. The canvas unit owns env rendering; the auth unit and
+# Caddy follow it. Containers run read-only, no capabilities, no privilege
+# escalation.
 cat > /etc/systemd/system/excalidraw-canvas.service <<'EOS'
 [Unit]
 Description=excalidraw-canvas
@@ -105,13 +120,18 @@ TimeoutStartSec=300
 ExecStartPre=-/usr/bin/docker pull ${IMAGE}
 ExecStartPre=-/usr/bin/docker rm -f excalidraw-canvas
 # Tolerate a failed sync (registry hiccup): the previous mapping still works.
-# The unprefixed render below is the hard gate - no env file, no start.
+# The unprefixed render below is the hard gate - no env files, no start.
 ExecStartPre=-/usr/local/bin/excalidraw-sync-env.sh
 ExecStartPre=/usr/local/bin/excalidraw-env.sh
-ExecStartPre=/usr/local/bin/excalidraw-render-caddy.sh
+# {env.API_TOKEN} is resolved when caddy loads its config: restart to pick up
+# a rotated token.
+ExecStartPre=/bin/systemctl restart caddy
 # --init so PID 1 forwards SIGTERM: the server flushes rooms to disk on it.
 ExecStart=/usr/bin/docker run --name excalidraw-canvas --rm --init \
+  --network excalidraw \
+  --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp \
   -e DATA_DIR=/data -e PORT=3000 -e HOST=0.0.0.0 -e LOG_LEVEL=info \
+  -e NODE_ENV=production -e PUBLIC_ORIGIN=https://${DOMAIN} \
   -v /mnt/disks/data:/data \
   -p 127.0.0.1:3000:3000 \
   ${IMAGE}
@@ -131,16 +151,20 @@ EnvironmentFile=/etc/excalidraw.image
 Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/docker rm -f excalidraw-auth
-ExecStart=/usr/bin/docker run --name excalidraw-auth --rm --network host \\
-  --env-file /run/excalidraw.env \\
+ExecStart=/usr/bin/docker run --name excalidraw-auth --rm \\
+  --network excalidraw \\
+  --cap-drop=ALL --security-opt=no-new-privileges --read-only \\
+  --env-file /run/excalidraw-oauth.env \\
+  -p 127.0.0.1:4180:4180 \\
   $OAUTH2_PROXY_IMAGE \\
   --provider=google \\
   --email-domain=subsets.com \\
   --redirect-url=https://$DOMAIN/oauth2/callback \\
-  --http-address=127.0.0.1:4180 \\
-  --upstream=http://127.0.0.1:3000 \\
+  --http-address=0.0.0.0:4180 \\
+  --upstream=http://excalidraw-canvas:3000 \\
   --reverse-proxy=true \\
   --cookie-secure=true \\
+  --cookie-samesite=lax \\
   --cookie-expire=168h \\
   --cookie-refresh=1h \\
   --skip-provider-button=true \\

@@ -61,23 +61,58 @@ steps:
 images: ["$IMAGE:$(git rev-parse --short HEAD)", "$IMAGE:latest"]
 EOC
 
-# 7. VM. Its service account needs secretAccessor + Artifact Registry reader.
-#    deploy/vm-startup.sh self-configures the box on every boot.
+# 7. A dedicated VM service account with NO project roles: it may read
+#    exactly these four secrets and pull from exactly this image repo.
+#    (The default compute SA is often Editor project-wide; an app compromise
+#    would inherit all of it.)
+gcloud iam service-accounts create excalidraw-vm --display-name='excalidraw-canvas VM'
+VM_SA="excalidraw-vm@$PROJECT.iam.gserviceaccount.com"
+for s in excalidraw-google-client-id excalidraw-google-client-secret \
+         excalidraw-cookie-secret excalidraw-api-token; do
+  gcloud secrets add-iam-policy-binding "$s" --role=roles/secretmanager.secretAccessor \
+    --member="serviceAccount:$VM_SA"
+done
+gcloud artifacts repositories add-iam-policy-binding excalidraw-canvas --location="$REGION" \
+  --role=roles/artifactregistry.reader --member="serviceAccount:$VM_SA"
+
+# 8. VM. deploy/vm-startup.sh self-configures the box on every boot.
 gcloud compute instances create excalidraw-canvas \
   --zone="$ZONE" --machine-type=e2-small \
   --image-family=debian-12 --image-project=debian-cloud \
+  --service-account="$VM_SA" --scopes=cloud-platform \
   --disk=name=excalidraw-canvas-data,device-name=excalidraw-canvas-data,mode=rw \
   --metadata-from-file=startup-script=deploy/vm-startup.sh \
   --metadata=image-ref="$IMAGE:latest",domain="$DOMAIN" \
   --tags=http-server,https-server
 
-# 8. DNS: A record for $DOMAIN -> the VM's external IP (Caddy needs it for the cert)
+# 9. DNS: A record for $DOMAIN -> the VM's external IP (Caddy needs it for the cert)
 gcloud compute instances describe excalidraw-canvas --zone="$ZONE" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
-Grant the VM's default compute service account `roles/secretmanager.secretAccessor`
-and `roles/artifactregistry.reader` on the project.
+## Security model (read before granting anything)
+
+- **Edge:** Caddy is the only public listener. A request with the bearer token
+  goes straight to the canvas (identity headers stripped); anything else goes
+  through oauth2-proxy (Google login, `@subsets.com`, `SameSite=Lax` cookie).
+  The canvas itself has no auth and is bound to `127.0.0.1`; it rejects
+  WebSocket upgrades from other origins (`PUBLIC_ORIGIN`).
+- **Shared bearer token = full access to every room** (list / read / write /
+  delete). Fine for an internal team; per-user tokens are a follow-up. It sits
+  in every engineer's MCP config. Rotate: add a secret version, then
+  `sudo systemctl restart excalidraw-canvas` (re-renders env + restarts Caddy).
+  Keep Caddy access logs off, or the token would land in them.
+- **Blast radius of an app compromise:** containers run read-only, no
+  capabilities, on a private docker network with the metadata server
+  firewalled (`DOCKER-USER` rule), so they can't mint VM credentials. The VM
+  SA (`excalidraw-vm`) can only read the four secrets and pull the image.
+- **Deploy identity:** only `refs/heads/main` of `subsets-ai/excalidraw-canvas`
+  can assume `excalidraw-deploy`; it can push to the image repo and ssh/sudo
+  into this one instance. Anyone with `artifactregistry.writer` on the image
+  repo is root-equivalent on the VM (the unit executes `deploy/excalidraw-env.sh`
+  from the pulled image as root) — treat that role like VM admin.
+- **Secrets never touch the boot disk:** rendered to tmpfs under `/run` on
+  every start; Caddy reads the token from its environment.
 
 ## Google OAuth
 
@@ -96,8 +131,9 @@ then `gcloud compute ssh --tunnel-through-iap` to `sudo systemctl restart
 excalidraw-canvas` (its ExecStartPre pulls `:latest`; stopping the old
 container flushes rooms to disk first).
 
-One-time wiring (WIF pool + `excalidraw-deploy` service account + roles, OS
-Login on the VM): run `deploy/setup-ci.sh`, then set the `GCP_PROJECT_ID` and
+One-time wiring (WIF pool pinned to repo + `main`, `excalidraw-deploy` service
+account with instance-scoped roles, OS Login on the VM): run
+`deploy/setup-ci.sh` after the VM exists, then set the `GCP_PROJECT_ID` and
 `GCP_WORKLOAD_IDENTITY_PROVIDER` repo variables it prints. The deploy job is
 skipped while `GCP_PROJECT_ID` is unset.
 
