@@ -355,7 +355,7 @@ function RoomPicker(): JSX.Element {
 
   return (
     <div className="room-picker">
-      <h1>Excalidraw Canvas</h1>
+      <h1>Doodle</h1>
       <p className="room-picker-hint">
         Every room is a shared, live canvas. Open one in as many tabs as you like; agents join with
         <code> --room &lt;name&gt;</code> or <code>EXCALIDRAW_ROOM</code>.
@@ -452,7 +452,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    document.title = `${roomId} · Excalidraw Canvas`
+    document.title = `${roomId} · Doodle`
   }, [roomId])
 
   // Room-scoped fetch
@@ -1048,7 +1048,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     <div className="app" data-theme={theme}>
       <div className="header">
         <div className="header-left">
-          <a className="room-home" href="/" title="All rooms">Excalidraw Canvas</a>
+          <a className="room-home" href="/" title="All rooms">Doodle</a>
           <span className="room-sep">/</span>
           <h1 className="room-name">{roomId}</h1>
           <button className="btn-ghost" onClick={copyLink} title="Copy room link">

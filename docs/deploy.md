@@ -21,7 +21,7 @@ room state, which wants exactly one long-lived instance.
 PROJECT=misc-internal
 REGION=europe-west1
 ZONE=europe-west1-b
-DOMAIN=draw.subsets.com
+DOMAIN=doodle.subsets.com
 gcloud config set project "$PROJECT"
 
 # 1. APIs
@@ -143,8 +143,8 @@ macOS with Python 3.9 misreports some `artifacts` commands; run it with
 ## Google OAuth
 
 Create an OAuth 2.0 Web client in the `subsets-347920` project (Google Auth
-Platform > Clients) — the NEML-E client there is the template: redirect URI
-`https://draw.subsets.com/oauth2/callback`, basic scopes only. oauth2-proxy
+Platform > Clients), name it `doodle` — the NEML-E client there is the template: redirect URI
+`https://doodle.subsets.com/oauth2/callback`, basic scopes only. oauth2-proxy
 restricts logins to `@subsets.com` (`--email-domain`), so no consent-screen
 verification is needed. Store id/secret in the two secrets above.
 
@@ -187,7 +187,7 @@ token and a room:
       "command": "npx",
       "args": ["-y", "github:subsets-ai/excalidraw-canvas"],
       "env": {
-        "EXPRESS_SERVER_URL": "https://draw.subsets.com",
+        "EXPRESS_SERVER_URL": "https://doodle.subsets.com",
         "EXCALIDRAW_API_TOKEN": "<excalidraw-api-token>",
         "EXCALIDRAW_ROOM": "platform-arch",
         "EXCALIDRAW_AGENT_NAME": "Claude (oliver)",
@@ -198,9 +198,9 @@ token and a room:
 }
 ```
 
-CLI: `npx -y github:subsets-ai/excalidraw-canvas --url https://draw.subsets.com --room platform-arch describe`
+CLI: `npx -y github:subsets-ai/excalidraw-canvas --url https://doodle.subsets.com --room platform-arch describe`
 (with `EXCALIDRAW_API_TOKEN` in the environment). Humans open
-`https://draw.subsets.com/r/platform-arch`.
+`https://doodle.subsets.com/r/platform-arch`.
 
 ## Restore from a snapshot
 

@@ -61,7 +61,7 @@ const server = createServer(app);
 // cookie would otherwise ride along on a cross-site WebSocket handshake from
 // any web page (Safari/Firefox don't default cookies to SameSite=Lax) and
 // leak the whole room. PUBLIC_ORIGIN is a comma-separated allowlist of
-// origins (e.g. https://draw.subsets.com); unset = allow all (local dev).
+// origins (e.g. https://doodle.subsets.com); unset = allow all (local dev).
 const allowedOrigins = new Set(
   (process.env.PUBLIC_ORIGIN || '').split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean)
 );
