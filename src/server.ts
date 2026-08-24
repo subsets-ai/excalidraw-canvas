@@ -113,8 +113,8 @@ function requestedRoomId(req: Request): string | null {
 }
 
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-  // Room management endpoints are not themselves room-scoped
-  if (req.path === '/rooms' || req.path.startsWith('/rooms/')) return next();
+  // Room management / identity endpoints are not themselves room-scoped
+  if (req.path === '/rooms' || req.path.startsWith('/rooms/') || req.path === '/me') return next();
   const id = requestedRoomId(req);
   if (!id) {
     return res.status(400).json({
@@ -229,6 +229,34 @@ function agentPresence(room: Room, req: Request, el: ServerElement | undefined):
   }, AGENT_PRESENCE_MS));
 }
 
+// ─── Identity from the auth proxy ──────────────────────────────────────
+// Behind Caddy + oauth2-proxy the browser path carries X-Forwarded-Email /
+// -Preferred-Username set by the proxy, and the bearer path has them
+// stripped (see deploy/vm-startup.sh), so they're trustworthy either way.
+// Locally there is no proxy and no auth, so a spoofed header only spoofs a
+// presence name.
+interface ProxyIdentity {
+  email: string;
+  username: string;
+}
+
+function identityFromHeaders(headers: IncomingMessage['headers']): ProxyIdentity | null {
+  const first = (v: string | string[] | undefined): string =>
+    (Array.isArray(v) ? v[0] : v)?.trim() ?? '';
+  const email = first(headers['x-forwarded-email']).toLowerCase();
+  if (!email || !email.includes('@')) return null;
+  const preferred = first(headers['x-forwarded-preferred-username']);
+  const username = (preferred || email.split('@')[0] || email).slice(0, 40);
+  return { email, username };
+}
+
+app.get('/api/me', (req: Request, res: Response) => {
+  const identity = identityFromHeaders(req.headers);
+  res.json(identity
+    ? { success: true, authenticated: true, email: identity.email, username: identity.username }
+    : { success: true, authenticated: false });
+});
+
 // ─── WebSocket ─────────────────────────────────────────────────────────
 
 function wsParams(req: IncomingMessage): { roomId: string | null; name: string } {
@@ -255,11 +283,14 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   }
   const clientId = generateId();
   room.clients.set(ws, clientId);
-  const me: Collaborator = { clientId, username: name, color: colorFor(clientId) };
+  const identity = identityFromHeaders(req.headers);
+  const me: Collaborator = identity
+    ? { clientId, username: identity.username, email: identity.email, authenticated: true, color: colorFor(identity.email) }
+    : { clientId, username: name, color: colorFor(clientId) };
   room.collaborators.set(clientId, me);
-  logger.info(`WebSocket connected: room="${room.id}" client=${clientId} name="${name}"`);
+  logger.info(`WebSocket connected: room="${room.id}" client=${clientId} name="${me.username}"${identity ? ' (auth)' : ''}`);
 
-  ws.send(JSON.stringify({ type: 'welcome', clientId, room: room.id, username: name }));
+  ws.send(JSON.stringify({ type: 'welcome', clientId, room: room.id, username: me.username, authenticated: !!identity }));
   ws.send(JSON.stringify(initialElementsMessage(room)));
 
   const syncMessage: SyncStatusMessage = {
@@ -297,6 +328,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
         break;
       }
       case 'rename': {
+        // Names from the auth proxy are not client-editable
+        if (collab.authenticated) break;
         if (typeof msg.username === 'string' && msg.username.trim()) {
           collab.username = msg.username.trim().slice(0, 40);
           broadcast(room, { type: 'collaborator_update', collaborator: publicCollaborator(collab) }, clientId);

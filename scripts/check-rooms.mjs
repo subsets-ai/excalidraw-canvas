@@ -59,9 +59,9 @@ async function api(room, path, init = {}) {
   return { status: r.status, body };
 }
 
-function connectWs(room, name, origin) {
+function connectWs(room, name, origin, headers) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=${room}&name=${encodeURIComponent(name)}`, origin ? { origin } : {});
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=${room}&name=${encodeURIComponent(name)}`, { ...(origin ? { origin } : {}), ...(headers ? { headers } : {}) });
     const inbox = [];
     const waiters = [];
     ws.on('message', raw => {
@@ -246,6 +246,21 @@ try {
 
   b.close();
   await a.next(m => m.type === 'collaborator_left', 'Bob left');
+
+  // identity from the auth proxy wins over ?name= and can't be renamed
+  const d = await connectWs('alpha', 'Spoof', undefined, { 'x-forwarded-email': 'Ada.Lovelace@subsets.com' });
+  const dw = await d.next(m => m.type === 'welcome', 'welcome d');
+  eq(dw.username, 'ada.lovelace', 'proxy identity sets username');
+  eq(dw.authenticated, true, 'welcome flags authenticated');
+  const dj = await a.next(m => m.type === 'collaborator_update' && m.collaborator.authenticated, 'auth collaborator seen');
+  eq(dj.collaborator.email, 'ada.lovelace@subsets.com', 'email lowercased on collaborator');
+  d.send({ type: 'rename', username: 'Mallory' });
+  check(await a.quiet(m => m.type === 'collaborator_update' && m.collaborator.username === 'Mallory'), 'rename ignored for authenticated user');
+  d.close();
+  r = await fetch(`${base}/api/me`, { headers: { 'x-forwarded-email': 'ob@subsets.com', 'x-forwarded-preferred-username': 'Oliver' } }).then(x => x.json());
+  eq([r.authenticated, r.username, r.email], [true, 'Oliver', 'ob@subsets.com'], '/api/me with proxy headers');
+  r = await fetch(`${base}/api/me`).then(x => x.json());
+  eq(r.authenticated, false, '/api/me without proxy headers');
   a.close(); c.close();
 
   // ---- CLI with --room

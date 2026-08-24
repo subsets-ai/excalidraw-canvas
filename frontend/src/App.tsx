@@ -43,6 +43,8 @@ interface ServerElement {
 interface Collaborator {
   clientId: string;
   username: string;
+  email?: string;
+  authenticated?: boolean;
   color: { background: string; stroke: string };
   pointer?: { x: number; y: number; tool: 'pointer' | 'laser' };
   button?: 'up' | 'down';
@@ -70,6 +72,7 @@ interface WebSocketMessage {
   offsetY?: number;
   clientId?: string;
   username?: string;
+  authenticated?: boolean;
   room?: string;
   collaborator?: Collaborator;
   collaborators?: Collaborator[];
@@ -403,6 +406,20 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   const [username, setUsername] = useState<string>(loadUsername)
   const usernameRef = useRef<string>(username)
   useEffect(() => { usernameRef.current = username }, [username])
+  // Behind the auth proxy the server knows who we are; the name box goes away
+  const [authenticated, setAuthenticated] = useState<boolean>(false)
+
+  useEffect(() => {
+    fetch('/api/me')
+      .then(r => r.json())
+      .then((me: { authenticated?: boolean; username?: string }) => {
+        if (me.authenticated && me.username) {
+          setAuthenticated(true)
+          setUsername(me.username)
+        }
+      })
+      .catch(() => { /* no proxy: keep the local name */ })
+  }, [])
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
@@ -665,6 +682,10 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     switch (data.type) {
       case 'welcome':
         if (data.clientId) clientIdRef.current = data.clientId
+        if (data.authenticated && data.username) {
+          setAuthenticated(true)
+          setUsername(data.username)
+        }
         return
       case 'collaborators':
         collaboratorsRef.current = new Map((data.collaborators || []).map(c => [c.clientId, c]))
@@ -1042,13 +1063,17 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
               {isConnected && collaboratorCount > 0 ? ` · ${collaboratorCount} other${collaboratorCount === 1 ? '' : 's'}` : ''}
             </span>
           </div>
-          <input
-            className="name-input"
-            placeholder="Your name"
-            defaultValue={username}
-            onBlur={e => commitUsername(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          />
+          {authenticated ? (
+            <span className="name-fixed" title="Signed in">{username}</span>
+          ) : (
+            <input
+              className="name-input"
+              placeholder="Your name"
+              defaultValue={username}
+              onBlur={e => commitUsername(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          )}
           <button className="btn-secondary" onClick={clearCanvas}>Clear room</button>
         </div>
       </div>

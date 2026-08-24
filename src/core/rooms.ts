@@ -16,6 +16,10 @@ import { DEFAULT_ROOM_ID, ROOM_ID_PATTERN } from './config.js';
 export interface Collaborator {
   clientId: string;
   username: string;
+  // Set when the name came from the auth proxy (X-Forwarded-Email), in
+  // which case the client can't rename itself
+  email?: string;
+  authenticated?: boolean;
   color: { background: string; stroke: string };
   pointer?: { x: number; y: number; tool: 'pointer' | 'laser' };
   button?: 'up' | 'down';

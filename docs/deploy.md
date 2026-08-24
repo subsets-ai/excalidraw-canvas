@@ -96,7 +96,9 @@ gcloud compute instances describe excalidraw-canvas --zone="$ZONE" \
   goes straight to the canvas (identity headers stripped); anything else goes
   through oauth2-proxy (Google login, `@subsets.com`, `SameSite=Lax` cookie).
   The canvas itself has no auth and is bound to `127.0.0.1`; it rejects
-  WebSocket upgrades from other origins (`PUBLIC_ORIGIN`).
+  WebSocket upgrades from other origins (`PUBLIC_ORIGIN`). Presence names come
+  from oauth2-proxy's `X-Forwarded-Email` / `-Preferred-Username` (`/api/me`);
+  signed-in users can't rename themselves.
 - **Shared bearer token = full access to every room** (list / read / write /
   delete). Fine for an internal team; per-user tokens are a follow-up. It sits
   in every engineer's MCP config. Rotate: add a secret version, then
