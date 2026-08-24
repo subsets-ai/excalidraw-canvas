@@ -26,7 +26,7 @@
     "test:bind": "npm run build:server && node scripts/check-local-bind.mjs",
     "test:mcp": "npm run build:server && node scripts/check-mcp-stdio.mjs",
     "type-check": "npx tsc --noEmit",
-    "prepare": "node scripts/prepare.mjs"
+    "prepare": "test ! -f scripts/prepare.mjs || node scripts/prepare.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
