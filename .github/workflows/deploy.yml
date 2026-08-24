@@ -1,0 +1,60 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/excalidraw-canvas/canvas
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run build
+      - run: npm test
+
+  deploy:
+    needs: [test]
+    if: vars.GCP_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: excalidraw-deploy@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - run: |
+          docker build -f Dockerfile.canvas -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+
+      # the unit's ExecStartPre pulls :latest; systemd stops the old
+      # container (which flushes rooms to disk) before starting the new one
+      - run: |
+          gcloud compute ssh excalidraw-canvas \
+            --zone europe-west1-b \
+            --tunnel-through-iap \
+            --quiet \
+            --command 'sudo systemctl restart excalidraw-canvas'
+        timeout-minutes: 5

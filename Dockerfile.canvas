@@ -59,6 +59,10 @@ COPY --from=backend-builder /app/dist ./dist
 # Copy built frontend from frontend-builder stage
 COPY --from=frontend-builder /app/dist/frontend ./dist/frontend
 
+# Consumed on the VM, not by the app: the systemd unit extracts it from the
+# image so the env->secret mapping always matches the running code.
+COPY deploy/excalidraw-env.sh ./deploy/excalidraw-env.sh
+
 # Set ownership to nodejs user
 RUN chown -R nodejs:nodejs /app
 
@@ -69,6 +73,8 @@ USER nodejs
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
+# Rooms persist to DATA_DIR when set (mount a volume there):
+#   docker run -e DATA_DIR=/data -v canvas-data:/data ...
 
 # Expose port
 EXPOSE 3000
@@ -77,6 +83,6 @@ EXPOSE 3000
 CMD ["node", "dist/server.js"]
 
 # Labels for metadata
-LABEL org.opencontainers.image.source="https://github.com/yctimlin/mcp_excalidraw"
+LABEL org.opencontainers.image.source="https://github.com/subsets-ai/excalidraw-canvas"
 LABEL org.opencontainers.image.description="MCP Excalidraw Canvas Server - Web UI and REST API"
 LABEL org.opencontainers.image.licenses="MIT"
