@@ -54,6 +54,8 @@ function printHelp(): void {
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
     '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
     '  Canvas URL comes from EXPRESS_SERVER_URL (default http://127.0.0.1:3000) or --url.',
+    '  Room comes from EXCALIDRAW_ROOM (default "default") or --room; browsers open /r/<room>.',
+    '  EXCALIDRAW_API_TOKEN is sent as a bearer token for self-hosted canvases behind an auth proxy.',
     '',
     'Run `mcp-excalidraw-server help <command>` for per-command usage.'
   ];
