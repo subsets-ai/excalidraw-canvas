@@ -47,10 +47,28 @@ gcloud artifacts repositories add-iam-policy-binding excalidraw-canvas \
 # instance); the root-equivalent roles are bound on the instance.
 gcloud projects add-iam-policy-binding $P --role=roles/compute.viewer \
   --member=serviceAccount:$SA --condition=None -q >/dev/null
-for r in compute.osAdminLogin iap.tunnelResourceAccessor; do
-  gcloud compute instances add-iam-policy-binding $VM --zone=$ZONE --project=$P \
-    --role=roles/$r --member=serviceAccount:$SA >/dev/null
-done
+gcloud compute instances add-iam-policy-binding $VM --zone=$ZONE --project=$P \
+  --role=roles/compute.osAdminLogin --member=serviceAccount:$SA >/dev/null
+# IAP tunnel access is an IAP resource, not instance IAM, and gcloud has no
+# per-instance command for it - use the IAP API directly.
+INSTANCE_ID=$(gcloud compute instances describe $VM --zone=$ZONE --project=$P --format='value(id)')
+IAP_RES="https://iap.googleapis.com/v1/projects/$NUM/iap_tunnel/zones/$ZONE/instances/$INSTANCE_ID"
+TOKEN=$(gcloud auth print-access-token)
+curl -sf -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$IAP_RES:getIamPolicy" |
+python3 -c "
+import json, sys
+policy = json.load(sys.stdin)
+member = 'serviceAccount:$SA'
+role = 'roles/iap.tunnelResourceAccessor'
+bindings = policy.setdefault('bindings', [])
+b = next((b for b in bindings if b['role'] == role), None)
+if b is None:
+    bindings.append({'role': role, 'members': [member]})
+elif member not in b['members']:
+    b['members'].append(member)
+json.dump({'policy': policy}, sys.stdout)
+" |
+curl -sf -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @- "$IAP_RES:setIamPolicy" >/dev/null
 
 # SSH to a VM running as excalidraw-vm requires actAs on that SA
 gcloud iam service-accounts add-iam-policy-binding $VM_SA \

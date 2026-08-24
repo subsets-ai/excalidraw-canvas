@@ -52,14 +52,32 @@ gcloud compute resource-policies create snapshot-schedule excalidraw-daily \
 gcloud compute disks add-resource-policies excalidraw-canvas-data --zone="$ZONE" \
   --resource-policies=excalidraw-daily
 
-# 6. First image (CI pushes :latest afterwards)
+# 6. First image (CI pushes :latest afterwards). The org policy pins
+#    resources to the EU, so Cloud Build needs an EU staging bucket and
+#    logs-to-Cloud-Logging (its defaults are US buckets).
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/excalidraw-canvas/canvas"
-gcloud builds submit --tag "$IMAGE:$(git rev-parse --short HEAD)" --config /dev/stdin . <<EOC
+SHA=$(git rev-parse --short HEAD)
+gcloud storage buckets create gs://misc-internal-cloudbuild-eu --location="$REGION" --uniform-bucket-level-access 2>/dev/null || true
+cat > /tmp/cloudbuild.yaml <<EOC
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: [build, -f, Dockerfile.canvas, -t, "$IMAGE:$(git rev-parse --short HEAD)", -t, "$IMAGE:latest", .]
-images: ["$IMAGE:$(git rev-parse --short HEAD)", "$IMAGE:latest"]
+  args: [build, -f, Dockerfile.canvas, -t, "$IMAGE:$SHA", -t, "$IMAGE:latest", .]
+images: ["$IMAGE:$SHA", "$IMAGE:latest"]
+options:
+  logging: CLOUD_LOGGING_ONLY
 EOC
+gcloud builds submit --region="$REGION" --gcs-source-staging-dir=gs://misc-internal-cloudbuild-eu/source --config /tmp/cloudbuild.yaml .
+# Check both tags landed; if only :$SHA did, add :latest
+# (`gcloud artifacts docker tags add "$IMAGE:$SHA" "$IMAGE:latest"`).
+gcloud artifacts docker tags list "$IMAGE"
+
+# 6b. Network: this project has one VPC per app (no `default`). Mirror neml-e.
+gcloud compute networks create excalidraw --subnet-mode=custom
+gcloud compute networks subnets create excalidraw --network=excalidraw --region="$REGION" --range=10.20.0.0/24
+gcloud compute firewall-rules create excalidraw-allow-web --network=excalidraw --direction=INGRESS \
+  --allow=tcp:80,tcp:443 --source-ranges=0.0.0.0/0 --target-tags=https-server
+gcloud compute firewall-rules create excalidraw-allow-iap-ssh --network=excalidraw --direction=INGRESS \
+  --allow=tcp:22 --source-ranges=35.235.240.0/20
 
 # 7. A dedicated VM service account with NO project roles: it may read
 #    exactly these four secrets and pull from exactly this image repo.
@@ -79,6 +97,7 @@ gcloud artifacts repositories add-iam-policy-binding excalidraw-canvas --locatio
 gcloud compute instances create excalidraw-canvas \
   --zone="$ZONE" --machine-type=e2-small \
   --image-family=debian-12 --image-project=debian-cloud \
+  --network=excalidraw --subnet=excalidraw \
   --service-account="$VM_SA" --scopes=cloud-platform \
   --disk=name=excalidraw-canvas-data,device-name=excalidraw-canvas-data,mode=rw \
   --metadata-from-file=startup-script=deploy/vm-startup.sh \
@@ -115,6 +134,11 @@ gcloud compute instances describe excalidraw-canvas --zone="$ZONE" \
   from the pulled image as root) — treat that role like VM admin.
 - **Secrets never touch the boot disk:** rendered to tmpfs under `/run` on
   every start; Caddy reads the token from its environment.
+
+Until the OAuth secrets have versions and `:latest` exists, the canvas unit
+sits in `activating` (retrying every 10 s) — expected on first boot. gcloud on
+macOS with Python 3.9 misreports some `artifacts` commands; run it with
+`CLOUDSDK_PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12`.
 
 ## Google OAuth
 
