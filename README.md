@@ -79,6 +79,16 @@ Excalidraw has an [official MCP](https://github.com/excalidraw/excalidraw-mcp) �
 
 **TL;DR** — The official MCP shows Excalidraw diagrams in your chat. This project gives your coding agent a full Excalidraw workbench: a canvas it can draw on, inspect, refine, and commit to your repo.
 
+## Rooms & Collaboration (this fork)
+
+[subsets-ai/excalidraw-canvas](https://github.com/subsets-ai/excalidraw-canvas) adds a shared, self-hosted, multi-user canvas on top of upstream:
+
+- **Rooms** — one server hosts many independent canvases. Browsers open `/r/<room>` (`/` lists rooms); agents pick theirs with `EXCALIDRAW_ROOM` or the global `--room` flag. Everything else — the 26 MCP tools, the CLI, the REST API — is unchanged.
+- **Real collaboration** — browser edits sync as per-element diffs (`POST /api/elements/reconcile`) using Excalidraw's own version/versionNonce rule, so several tabs and agents editing the same room converge instead of overwriting each other. The old full-scene `POST /api/elements/sync` is gone (410).
+- **Presence** — live cursors, selections and names over the existing WebSocket; agents appear as a short-lived marker on the element they just touched (`EXCALIDRAW_AGENT_NAME`).
+- **Persistence** — set `DATA_DIR` and every room is a JSON file on disk (atomic writes, flushed on shutdown). Unset = in-memory, as upstream.
+- **Auth-proxy friendly** — `EXCALIDRAW_API_TOKEN` is sent as a bearer token on every request (health probes included) so a shared canvas can sit behind Caddy + oauth2-proxy. See [`docs/deploy.md`](docs/deploy.md) for the Google Cloud setup.
+
 ## What's New
 
 Current package version: **2.0.0**. The current release line is **v2.0 — Interchange-Grade Exports & MCP 2026-07-28**.
@@ -230,6 +240,10 @@ The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no c
 | `ENABLE_CANVAS_SYNC` | Enable real-time canvas sync | `true` |
 | `EXCALIDRAW_NO_AUTOSTART` | Set `1` to disable canvas auto-start | (unset) |
 | `EXCALIDRAW_EXPORT_DIR` | Base directory MCP file exports may write to | current working dir |
+| `EXCALIDRAW_ROOM` | Room this MCP server / CLI process draws in (`--room` overrides) | `default` |
+| `EXCALIDRAW_API_TOKEN` | Bearer token sent with every canvas request (auth proxy in front of a shared canvas) | (unset) |
+| `EXCALIDRAW_AGENT_NAME` | Name shown to humans for the agent's presence marker | `Agent` |
+| `DATA_DIR` | Canvas server: persist rooms as JSON files under this directory | (unset = in-memory) |
 | `PORT` / `HOST` | Canvas server bind address | `3000` / `127.0.0.1` |
 
 ---
@@ -420,7 +434,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 ### Notes
 
 - **Docker networking**: Use `host.docker.internal` to reach the canvas server running on your host machine. On Linux, you may need `--add-host=host.docker.internal:host-gateway` or use `172.17.0.1`. The Docker MCP image sets `EXCALIDRAW_NO_AUTOSTART=1` (it has no frontend build) — run the canvas as its own container.
-- **In-memory storage**: The canvas server stores elements in memory. Restarting the server clears all elements — use `export` / `snapshot` for persistence.
+- **Storage**: The canvas server keeps rooms in memory unless `DATA_DIR` is set, in which case each room is persisted to `DATA_DIR/rooms/<room>.json`. Without it, restarting clears all elements — use `export` / `snapshot`.
 
 ## MCP Tools (26 Total)
 
@@ -574,7 +588,7 @@ Yes — that's the recommended path for coding agents: `npx -y mcp-excalidraw-se
 
 ## Known Issues / TODO
 
-- [ ] **Persistent storage**: Elements are stored in-memory — restarting the server clears everything. Use `export` / snapshots as a workaround.
+- [x] **Persistent storage**: set `DATA_DIR` (this fork).
 - [ ] **Image export requires a browser**: screenshots and image export rely on the frontend doing the actual rendering. A headless rendering mode is planned.
 
 Contributions welcome!

@@ -17,19 +17,24 @@ process.env.NO_COLOR = '1';
 
 const argv = process.argv.slice(2);
 
-// Global --url flag: must land in the environment before any core module
-// (which reads EXPRESS_SERVER_URL at import time) is loaded.
+// Global --url / --room flags: must land in the environment before any core
+// module (which reads EXPRESS_SERVER_URL / EXCALIDRAW_ROOM at import time)
+// is loaded.
+const GLOBAL_FLAGS: Record<string, string> = { '--url': 'EXPRESS_SERVER_URL', '--room': 'EXCALIDRAW_ROOM' };
 for (let i = 0; i < argv.length; i++) {
   const token = argv[i]!;
-  if (token === '--url' && argv[i + 1]) {
-    process.env.EXPRESS_SERVER_URL = argv[i + 1];
-    argv.splice(i, 2);
-    break;
-  }
-  if (token.startsWith('--url=')) {
-    process.env.EXPRESS_SERVER_URL = token.slice('--url='.length);
+  const eq = token.indexOf('=');
+  const flag = eq === -1 ? token : token.slice(0, eq);
+  const envName = GLOBAL_FLAGS[flag];
+  if (!envName) continue;
+  if (eq !== -1) {
+    process.env[envName] = token.slice(eq + 1);
     argv.splice(i, 1);
-    break;
+    i--;
+  } else if (argv[i + 1]) {
+    process.env[envName] = argv[i + 1];
+    argv.splice(i, 2);
+    i--;
   }
 }
 

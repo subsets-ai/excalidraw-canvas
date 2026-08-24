@@ -12,3 +12,33 @@ export const EXCALIDRAW_NO_AUTOSTART = process.env.EXCALIDRAW_NO_AUTOSTART === '
 
 // Safe file path validation base directory (see sanitizeFilePath)
 export const ALLOWED_EXPORT_DIR = process.env.EXCALIDRAW_EXPORT_DIR || process.cwd();
+
+// Rooms: every canvas server hosts many independent canvases ("rooms").
+// The MCP server / CLI operate on exactly one room per process, chosen by
+// EXCALIDRAW_ROOM (or the global --room CLI flag). Browsers pick a room by
+// URL (/r/<room>). The default room keeps upstream single-canvas behaviour.
+export const DEFAULT_ROOM_ID = 'default';
+export const ROOM_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const ROOM_HEADER = 'x-excalidraw-room';
+
+export function normalizeRoomId(raw: string | undefined | null): string | null {
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_ROOM_ID;
+  const id = String(raw).trim().toLowerCase();
+  return ROOM_ID_PATTERN.test(id) ? id : null;
+}
+
+const roomFromEnv = normalizeRoomId(process.env.EXCALIDRAW_ROOM);
+if (roomFromEnv === null) {
+  throw new Error(
+    `Invalid EXCALIDRAW_ROOM "${process.env.EXCALIDRAW_ROOM}": use 1-64 chars of a-z, 0-9, "-" or "_".`
+  );
+}
+export const EXCALIDRAW_ROOM: string = roomFromEnv;
+
+// Optional bearer token sent with every canvas request. The canvas server
+// itself does not check it — it's for the auth layer in front of a shared,
+// self-hosted canvas (see docs/deploy.md).
+export const EXCALIDRAW_API_TOKEN = process.env.EXCALIDRAW_API_TOKEN || '';
+
+// Display name for the presence indicator when an agent draws
+export const EXCALIDRAW_AGENT_NAME = process.env.EXCALIDRAW_AGENT_NAME || 'Agent';

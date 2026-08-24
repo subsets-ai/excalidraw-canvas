@@ -1,6 +1,33 @@
 import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
-import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC } from './config.js';
+import {
+  EXPRESS_SERVER_URL,
+  ENABLE_CANVAS_SYNC,
+  EXCALIDRAW_ROOM,
+  EXCALIDRAW_API_TOKEN,
+  EXCALIDRAW_AGENT_NAME,
+  ROOM_HEADER
+} from './config.js';
+
+// Every request to the canvas carries the room this process works in, the
+// agent's display name (for the presence marker humans see), and — when
+// configured — the bearer token an auth proxy in front of a shared canvas
+// expects. Health/identity probes go through here too: behind an auth proxy
+// an unauthenticated /health returns the proxy's login page, which would be
+// misreported as a foreign service.
+export function canvasHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...(extra ?? {}),
+    [ROOM_HEADER]: EXCALIDRAW_ROOM,
+    'x-excalidraw-agent': EXCALIDRAW_AGENT_NAME
+  };
+  if (EXCALIDRAW_API_TOKEN) headers['Authorization'] = `Bearer ${EXCALIDRAW_API_TOKEN}`;
+  return headers;
+}
+
+export function canvasFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, headers: canvasHeaders(init.headers as Record<string, string> | undefined) });
+}
 
 // API Response types
 export interface ApiResponse {
@@ -69,7 +96,7 @@ export async function syncToCanvas(operation: string, data: any): Promise<SyncRe
     await assertCanvasIdentity();
 
     logger.debug(`Syncing to canvas: ${operation}`, { url, data });
-    const response = await fetch(url, options);
+    const response = await canvasFetch(url, options);
 
     // Parse JSON response regardless of HTTP status
     const result = await response.json() as ApiResponse;
@@ -128,7 +155,7 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
   try {
     await assertCanvasIdentity();
-    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`);
+    const response = await canvasFetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`);
     if (!response.ok) {
       logger.warn(`Failed to fetch element ${elementId}: ${response.status}`);
       return null;
@@ -145,7 +172,7 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   await assertCanvasIdentity();
-  const response = await fetch(`${EXPRESS_SERVER_URL}${path}`, init);
+  const response = await canvasFetch(`${EXPRESS_SERVER_URL}${path}`, init);
   const data = await response.json().catch(() => null) as any;
   if (!response.ok) {
     throw new Error(data?.error || `HTTP server error: ${response.status} ${response.statusText}`);
@@ -303,7 +330,7 @@ async function assertCanvasIdentity(): Promise<void> {
       try {
         let response: Response;
         try {
-          response = await fetch(`${EXPRESS_SERVER_URL}/health`, { signal: AbortSignal.timeout(1500) });
+          response = await canvasFetch(`${EXPRESS_SERVER_URL}/health`, { signal: AbortSignal.timeout(1500) });
         } catch (error) {
           // Fail CLOSED on timeout: a listener that accepts connections but
           // never answers /health could still be a foreign service that
@@ -351,10 +378,14 @@ export interface HealthStatus {
   // Identity fields (v1.1+); `stop` requires both before signaling anything
   service?: string;
   pid?: number;
+  // Rooms (this fork)
+  room?: string;
+  rooms?: number;
+  persistence?: boolean;
 }
 
 export async function getHealth(timeoutMs = 2000): Promise<HealthStatus> {
-  const response = await fetch(`${EXPRESS_SERVER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+  const response = await canvasFetch(`${EXPRESS_SERVER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     throw new Error(`Health check failed: ${response.status}`);
   }

@@ -1,0 +1,187 @@
+#!/bin/bash
+# Self-configuring startup script for the excalidraw-canvas Debian VM.
+# Idempotent; runs on every boot. Reads `image-ref` and `domain` from instance
+# metadata. Logs to /var/log/excalidraw-startup.log.
+#
+# Layout on the box (all localhost-bound; Caddy is the only public listener):
+#   caddy :443  --bearer token--> canvas :3000
+#              --otherwise------> oauth2-proxy :4180 --Google login--> canvas :3000
+# Both containers sit on a private docker network with the GCE metadata
+# server firewalled off, so an app compromise cannot mint VM credentials.
+set -uxo pipefail
+exec > /var/log/excalidraw-startup.log 2>&1
+
+META="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+IMAGE=$(curl -s -H "Metadata-Flavor: Google" "$META/image-ref")
+DOMAIN=$(curl -s -H "Metadata-Flavor: Google" "$META/domain")
+# Pinned by digest; bump deliberately.
+OAUTH2_PROXY_IMAGE=quay.io/oauth2-proxy/oauth2-proxy:v7.7.1@sha256:f6a4aa83a27e316114bf79664302b1ffb2cc8ce697fb479273af4feb3fb16fe3
+
+# 1. Mount the dedicated data disk (holds rooms/*.json).
+DISK=/dev/disk/by-id/google-excalidraw-canvas-data
+MNT=/mnt/disks/data
+blkid "$DISK" >/dev/null 2>&1 || mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$DISK"
+mkdir -p "$MNT"
+mountpoint -q "$MNT" || mount -o discard,defaults "$DISK" "$MNT"
+grep -q "$MNT" /etc/fstab || echo "$DISK $MNT ext4 discard,defaults,nofail 0 2" >> /etc/fstab
+# Never let the app boot on an empty boot-disk directory: it would silently
+# serve empty rooms and then overwrite the real ones on the next deploy.
+mountpoint -q "$MNT" || { echo "FATAL: data disk not mounted at $MNT"; exit 1; }
+# The canvas image runs as uid 1001
+chown 1001:1001 "$MNT"
+
+# 2. Install docker, gcloud, caddy (each only if missing).
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y ca-certificates curl gnupg apt-transport-https
+if ! command -v docker >/dev/null; then apt-get install -y docker.io && systemctl enable --now docker; fi
+if ! command -v gcloud >/dev/null; then
+  curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+  apt-get update && apt-get install -y google-cloud-cli
+fi
+if ! command -v caddy >/dev/null; then
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update && apt-get install -y caddy
+fi
+
+# 3. Containers never talk to the GCE metadata server's HTTP API: the VM's
+# service account is for the host (secret fetch, image pull), not for the
+# app. DNS (port 53) must stay open — on GCE the host resolver IS the
+# metadata server, and Docker's embedded DNS forwards to it.
+docker network inspect excalidraw >/dev/null 2>&1 || docker network create excalidraw
+iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+for proto in udp tcp; do
+  iptables -C DOCKER-USER -d 169.254.169.254 -p $proto --dport 53 -j RETURN 2>/dev/null ||
+    iptables -I DOCKER-USER 1 -d 169.254.169.254 -p $proto --dport 53 -j RETURN
+done
+
+# 4. Let root's docker authenticate to Artifact Registry via the VM service account.
+gcloud auth configure-docker europe-west1-docker.pkg.dev -q
+
+# 5. Env sync: lift the env->secret mapping out of the deployed image so it
+# always matches the running code (deploy/excalidraw-env.sh in the repo).
+cat > /usr/local/bin/excalidraw-sync-env.sh <<'EOS'
+#!/bin/sh
+set -e
+. /etc/excalidraw.image
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+docker run --rm --network none --entrypoint cat "$IMAGE" /app/deploy/excalidraw-env.sh > "$TMP"
+[ -s "$TMP" ]
+install -m 700 "$TMP" /usr/local/bin/excalidraw-env.sh
+EOS
+chmod +x /usr/local/bin/excalidraw-sync-env.sh
+
+echo "IMAGE=$IMAGE" > /etc/excalidraw.image
+echo "DOMAIN=$DOMAIN" >> /etc/excalidraw.image
+
+# 6. Caddy. The bearer token is read from the environment (systemd drop-in
+# below), never written into the Caddyfile. On the bearer path the identity
+# headers oauth2-proxy would set are stripped, so the canvas can trust
+# X-Forwarded-Email on both paths.
+cat > /etc/caddy/Caddyfile <<EOS
+$DOMAIN {
+	# MCP server / CLI: bearer token, no browser session
+	@token header Authorization "Bearer {env.API_TOKEN}"
+	handle @token {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -X-Forwarded-Email
+			header_up -X-Forwarded-User
+			header_up -X-Forwarded-Groups
+			header_up -X-Forwarded-Preferred-Username
+			header_up -X-Forwarded-Access-Token
+		}
+	}
+	# Everyone else: Google login via oauth2-proxy, which proxies to the canvas
+	handle {
+		reverse_proxy 127.0.0.1:4180
+	}
+}
+EOS
+mkdir -p /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/excalidraw.conf <<'EOS'
+[Service]
+# Rendered by excalidraw-canvas.service before it (re)starts caddy; tolerate
+# absence on first boot so caddy still comes up.
+EnvironmentFile=-/run/excalidraw-caddy.env
+EOS
+
+# 7. systemd units. The canvas unit owns env rendering; the auth unit and
+# Caddy follow it. Containers run read-only, no capabilities, no privilege
+# escalation.
+cat > /etc/systemd/system/excalidraw-canvas.service <<'EOS'
+[Unit]
+Description=excalidraw-canvas
+After=docker.service network-online.target
+Requires=docker.service
+RequiresMountsFor=/mnt/disks/data
+Wants=network-online.target excalidraw-auth.service
+[Service]
+EnvironmentFile=/etc/excalidraw.image
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+ExecStartPre=-/usr/bin/docker pull ${IMAGE}
+ExecStartPre=-/usr/bin/docker rm -f excalidraw-canvas
+# Tolerate a failed sync (registry hiccup): the previous mapping still works.
+# The unprefixed render below is the hard gate - no env files, no start.
+ExecStartPre=-/usr/local/bin/excalidraw-sync-env.sh
+ExecStartPre=/usr/local/bin/excalidraw-env.sh
+# {env.API_TOKEN} is resolved when caddy loads its config: restart to pick up
+# a rotated token.
+ExecStartPre=/bin/systemctl restart caddy
+# --init so PID 1 forwards SIGTERM: the server flushes rooms to disk on it.
+ExecStart=/usr/bin/docker run --name excalidraw-canvas --rm --init \
+  --network excalidraw \
+  --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp \
+  -e DATA_DIR=/data -e PORT=3000 -e HOST=0.0.0.0 -e LOG_LEVEL=info \
+  -e NODE_ENV=production -e PUBLIC_ORIGIN=https://${DOMAIN} -e LOG_FILE_PATH=/tmp/excalidraw.log \
+  -v /mnt/disks/data:/data \
+  -p 127.0.0.1:3000:3000 \
+  ${IMAGE}
+ExecStop=/usr/bin/docker stop -t 30 excalidraw-canvas
+[Install]
+WantedBy=multi-user.target
+EOS
+
+cat > /etc/systemd/system/excalidraw-auth.service <<EOS
+[Unit]
+Description=excalidraw oauth2-proxy
+After=docker.service excalidraw-canvas.service
+Requires=docker.service
+BindsTo=excalidraw-canvas.service
+[Service]
+EnvironmentFile=/etc/excalidraw.image
+Restart=always
+RestartSec=10
+ExecStartPre=-/usr/bin/docker rm -f excalidraw-auth
+ExecStart=/usr/bin/docker run --name excalidraw-auth --rm \\
+  --network excalidraw \\
+  --cap-drop=ALL --security-opt=no-new-privileges --read-only \\
+  --env-file /run/excalidraw-oauth.env \\
+  -p 127.0.0.1:4180:4180 \\
+  $OAUTH2_PROXY_IMAGE \\
+  --provider=google \\
+  --email-domain=subsets.com \\
+  --redirect-url=https://$DOMAIN/oauth2/callback \\
+  --http-address=0.0.0.0:4180 \\
+  --upstream=http://excalidraw-canvas:3000 \\
+  --reverse-proxy=true \\
+  --cookie-secure=true \\
+  --cookie-samesite=lax \\
+  --cookie-expire=168h \\
+  --cookie-refresh=1h \\
+  --skip-provider-button=true \\
+  --pass-user-headers=true
+ExecStop=/usr/bin/docker stop -t 10 excalidraw-auth
+[Install]
+WantedBy=multi-user.target
+EOS
+
+systemctl daemon-reload
+systemctl enable excalidraw-canvas.service excalidraw-auth.service
+systemctl restart excalidraw-canvas.service
+systemctl restart excalidraw-auth.service
+echo "excalidraw-canvas startup complete"

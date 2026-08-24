@@ -39,6 +39,10 @@ coverage
 !README.md
 docs
 
+# Deploy: only the env mapping is baked into the image
+deploy/*
+!deploy/excalidraw-env.sh
+
 # Docker
 Dockerfile*
 docker-compose*.yml

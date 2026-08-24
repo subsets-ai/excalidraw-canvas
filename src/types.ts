@@ -186,7 +186,13 @@ export type WebSocketMessageType =
   | 'export_image_request'
   | 'set_viewport'
   | 'files_added'
-  | 'file_deleted';
+  | 'file_deleted'
+  // rooms / collaboration
+  | 'welcome'
+  | 'elements_reconciled'
+  | 'collaborators'
+  | 'collaborator_update'
+  | 'collaborator_left';
 
 export interface InitialElementsMessage extends WebSocketMessage {
   type: 'initial_elements';
@@ -284,20 +290,29 @@ export interface Snapshot {
   createdAt: string;
 }
 
-// In-memory storage for Excalidraw elements
-export const elements = new Map<string, ServerElement>();
+// Room state (elements, snapshots, files) lives in core/rooms.ts — one
+// canvas server hosts many independent rooms.
 
-// In-memory storage for snapshots
-export const snapshots = new Map<string, Snapshot>();
-
-// In-memory file storage for image elements (Excalidraw BinaryFiles)
+// File storage for image elements (Excalidraw BinaryFiles)
 export interface ExcalidrawFile {
   id: string;
   dataURL: string;
   mimeType: string;
   created: number;
 }
-export const files = new Map<string, ExcalidrawFile>();
+
+// Diff-based browser -> server sync (replaces the old full-scene overwrite)
+export interface ReconcileRequest {
+  clientId?: string;
+  elements: ServerElement[];
+}
+
+export interface ReconcileResponse extends ApiResponse {
+  accepted: string[];
+  // Elements the server kept its own (newer) version of, so the client can
+  // catch up instead of fighting
+  rejected: ServerElement[];
+}
 
 // Validation function for Excalidraw elements
 export function validateElement(element: Partial<ServerElement>): element is ServerElement {
