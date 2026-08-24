@@ -94,6 +94,35 @@
 
         .room-picker-hint { color: #666; font-size: 14px; line-height: 1.5; }
 
+        .tagline { color: #777; font-size: 13px; margin: -4px 0 16px; }
+        .tagline a { color: inherit; }
+
+        .guide { margin-top: 40px; border-top: 1px solid #e5e5e5; padding-top: 20px; }
+        .guide h2 { font-size: 18px; margin: 0 0 6px; }
+        .guide h3 { font-size: 14px; margin: 18px 0 6px; }
+        .guide-hint { color: #777; font-size: 13px; line-height: 1.5; margin: 4px 0; }
+        .guide-hint code { word-break: break-all; }
+
+        .copy-block { position: relative; }
+        .copy-block pre {
+            background: #f3f3f5;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            padding: 12px 70px 12px 12px;
+            font-size: 12.5px;
+            line-height: 1.5;
+            overflow-x: auto;
+            margin: 0;
+        }
+        .copy-btn { position: absolute; top: 8px; right: 8px; background: #fff; }
+
+        @media (prefers-color-scheme: dark) {
+            body:not(:has(.app)) .guide { border-color: #333; }
+            body:not(:has(.app)) .copy-block pre { background: #1b1b1f; border-color: #333; color: #e3e3e8; }
+            body:not(:has(.app)) .copy-btn { background: #232329; color: #9a9aa5; border-color: #444; }
+            body:not(:has(.app)) .tagline, body:not(:has(.app)) .guide-hint { color: #9a9aa5; }
+        }
+
         .room-picker code {
             background: #eee;
             padding: 1px 5px;
