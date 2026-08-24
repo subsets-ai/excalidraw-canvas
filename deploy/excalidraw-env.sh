@@ -11,15 +11,23 @@ set -e
 PROJECT=misc-internal
 umask 077
 get() { gcloud secrets versions access latest --secret="$1" --project="$PROJECT"; }
-{
-  echo "OAUTH2_PROXY_CLIENT_ID=$(get excalidraw-google-client-id)"
-  echo "OAUTH2_PROXY_CLIENT_SECRET=$(get excalidraw-google-client-secret)"
-  echo "OAUTH2_PROXY_COOKIE_SECRET=$(get excalidraw-cookie-secret)"
-} > /run/excalidraw-oauth.env
-# An empty token would turn Caddy's matcher into `Authorization: Bearer ` —
-# an unauthenticated path. Refuse to start instead.
+# `set -e` does not fire on a failed command substitution inside echo, so
+# fetch first and refuse to start on anything empty: a missing OAuth secret
+# would silently break login, and an empty token would turn Caddy's matcher
+# into `Authorization: Bearer ` — an unauthenticated path.
+CLIENT_ID=$(get excalidraw-google-client-id)
+CLIENT_SECRET=$(get excalidraw-google-client-secret)
+COOKIE_SECRET=$(get excalidraw-cookie-secret)
 TOKEN=$(get excalidraw-api-token)
-[ -n "$TOKEN" ] || { echo "excalidraw-api-token is empty" >&2; exit 1; }
+for v in CLIENT_ID CLIENT_SECRET COOKIE_SECRET TOKEN; do
+  eval "val=\$$v"
+  [ -n "$val" ] || { echo "secret for $v is empty or missing" >&2; exit 1; }
+done
+{
+  echo "OAUTH2_PROXY_CLIENT_ID=$CLIENT_ID"
+  echo "OAUTH2_PROXY_CLIENT_SECRET=$CLIENT_SECRET"
+  echo "OAUTH2_PROXY_COOKIE_SECRET=$COOKIE_SECRET"
+} > /run/excalidraw-oauth.env
 {
   echo "API_TOKEN=$TOKEN"
 } > /run/excalidraw-caddy.env
