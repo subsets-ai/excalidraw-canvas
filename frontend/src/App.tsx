@@ -130,7 +130,21 @@ function saveUsername(name: string): void {
   try { window.localStorage?.setItem(NAME_STORAGE_KEY, name) } catch { /* ignore */ }
 }
 
-// ─── Element helpers (unchanged from upstream) ─────────────────────────
+// ─── Element helpers ───────────────────────────────────────────────────
+
+// Excalidraw's restore/reconcile expect elements in z-order (monotonic
+// fractional `index`); anything else is "repaired" by array position, which
+// silently undoes bring-to-front / send-to-back. Sort before handing scenes
+// to Excalidraw. Index-less elements keep their relative order at the end.
+const compareByIndex = (a: { index?: string | null; id?: string }, b: { index?: string | null; id?: string }): number => {
+  const ai = typeof a.index === 'string' ? a.index : null
+  const bi = typeof b.index === 'string' ? b.index : null
+  if (ai !== null && bi !== null) return ai < bi ? -1 : ai > bi ? 1 : ((a.id ?? '') < (b.id ?? '') ? -1 : (a.id ?? '') > (b.id ?? '') ? 1 : 0)
+  if (ai !== null) return -1
+  if (bi !== null) return 1
+  return 0
+}
+const sortByIndex = <T extends { index?: string | null; id?: string }>(elements: T[]): T[] => elements.slice().sort(compareByIndex)
 
 const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawElement> => {
   const {
@@ -563,7 +577,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     })
     merged.push(...incomingById.values())
 
-    const converted = convertElementsPreservingImageProps(merged)
+    const converted = convertElementsPreservingImageProps(sortByIndex(merged as any))
     // Text metrics from elsewhere are never trusted (see remeasureText); the
     // synchronous pass here gives a first fit, the font-aware pass follows.
     const needsMeasure = incoming.some(el => el.type === 'text')
@@ -640,7 +654,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     // Excalidraw only honours refreshDimensions together with repairBindings
     // (restore.ts returns early otherwise); bindings are repaired against
     // this subset only, so keep just the re-measured text elements.
-    const restored = restoreElements(withContainers as any, null, { refreshDimensions: true, repairBindings: true })
+    const restored = restoreElements(sortByIndex(withContainers as any) as any, null, { refreshDimensions: true, repairBindings: true })
     const changed = restored.filter(r => {
       if (r.type !== 'text') return false
       const local = byId.get(r.id)

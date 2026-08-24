@@ -41,6 +41,7 @@ import {
   liveElements,
   allElements,
   touchRoom,
+  sortByIndex,
   saveAllRooms,
   roomCount,
   colorFor,
@@ -1214,7 +1215,7 @@ app.post('/api/elements/reconcile', (req: Request, res: Response) => {
       touchRoom(room);
       broadcast(room, {
         type: 'elements_reconciled',
-        elements: accepted,
+        elements: sortByIndex(accepted),
         timestamp: nowIso()
       }, typeof clientId === 'string' ? clientId : undefined);
     }
