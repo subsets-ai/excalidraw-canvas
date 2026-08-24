@@ -6,7 +6,9 @@ import {
   ExcalidrawImperativeAPI,
   exportToBlob,
   exportToSvg,
-  reconcileElements
+  reconcileElements,
+  restoreElements,
+  FONT_FAMILY
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import type { Collaborator as ExcalidrawCollaborator, SocketId } from '@excalidraw/excalidraw/types/types'
@@ -422,6 +424,10 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   // What the server holds, as far as this tab knows — the diff base for sync
   const knownVersionsRef = useRef<Map<string, VersionKey>>(new Map())
 
+  // Messages that arrive before the Excalidraw API exists (cold load: the
+  // socket's initial_elements can beat the editor mount) are replayed later
+  const pendingMessagesRef = useRef<WebSocketMessage[]>([])
+
   // Presence
   const collaboratorsRef = useRef<Map<string, Collaborator>>(new Map())
   const [collaboratorCount, setCollaboratorCount] = useState(0)
@@ -483,14 +489,22 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     merged.push(...incomingById.values())
 
     const converted = convertElementsPreservingImageProps(merged)
+    // Agent-created labels arrive with estimated text metrics; let Excalidraw
+    // re-measure and re-wrap them against their containers (the same pass it
+    // runs when opening a .excalidraw file), otherwise glyphs get clipped.
+    const needsMeasure = incoming.some(el => el.type === 'text' && el.source !== 'browser')
+    const restored = needsMeasure
+      ? restoreElements(converted as any, null, { refreshDimensions: true, repairBindings: true })
+      : converted
     const incomingIds = new Set(incoming.map(el => el.id))
-    const remote = converted.filter(el => el.id && incomingIds.has(el.id))
+    const remote = restored.filter(el => el.id && incomingIds.has(el.id))
 
     const reconciled = reconcileElements(current, remote as any, api.getAppState())
     applySceneUpdateWithoutAutoSync(api, {
       elements: reconciled,
       captureUpdate: CaptureUpdateAction.NEVER
     })
+    if (needsMeasure) remeasureAfterFonts(remote as any)
   }
 
   useEffect(() => {
@@ -514,8 +528,52 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     if (excalidrawAPI) {
       loadExistingElements()
       if (!isConnected) connectWebSocket()
+      const queued = pendingMessagesRef.current
+      pendingMessagesRef.current = []
+      queued.forEach(msg => { void handleWebSocketMessage(msg) })
     }
   }, [excalidrawAPI, isConnected])
+
+  // Excalidraw loads fonts lazily; text measured before a font arrives is too
+  // narrow and renders clipped. Re-measure the scene whenever a font batch
+  // finishes loading (same pass Excalidraw runs when opening a file).
+  const remeasureText = (): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const current = api.getSceneElementsIncludingDeleted()
+    if (!current.some(el => el.type === 'text')) return
+    const restored = restoreElements(current as any, null, { refreshDimensions: true, repairBindings: false })
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: restored,
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+  }
+
+  // Make sure the fonts these text elements use are actually loaded, then
+  // re-measure. Excalidraw registers its font faces up front but only loads
+  // them on demand, so measuring right after updateScene uses the fallback.
+  const remeasureAfterFonts = (elements: Array<{ type?: string; fontFamily?: number | string; fontSize?: number }>): void => {
+    if (typeof document === 'undefined' || !document.fonts) return
+    const idToName = new Map<number, string>(Object.entries(FONT_FAMILY).map(([name, id]) => [id as number, name]))
+    const specs = new Set<string>()
+    for (const el of elements) {
+      if (el.type !== 'text') continue
+      const name = idToName.get(Number(el.fontFamily))
+      if (name) specs.add(`${el.fontSize ?? 20}px "${name}"`)
+    }
+    if (specs.size === 0) return
+    Promise.all(Array.from(specs).map(spec => document.fonts.load(spec).catch(() => [])))
+      .then(() => remeasureText())
+      .catch(() => { /* ignore */ })
+  }
+  ;(window as any).__remeasure = remeasureText
+
+  useEffect(() => {
+    if (!excalidrawAPI || typeof document === 'undefined' || !document.fonts) return
+    const onFonts = (): void => { setTimeout(remeasureText, 0) }
+    document.fonts.addEventListener('loadingdone', onFonts)
+    return () => document.fonts.removeEventListener('loadingdone', onFonts)
+  }, [excalidrawAPI])
 
   const loadExistingElements = async (): Promise<void> => {
     try {
@@ -631,7 +689,10 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     }
 
     const excalidrawAPI = excalidrawAPIRef.current
-    if (!excalidrawAPI) return
+    if (!excalidrawAPI) {
+      pendingMessagesRef.current.push(data)
+      return
+    }
 
     try {
       switch (data.type) {
@@ -996,7 +1057,11 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
 
       <div className="canvas-container">
         <Excalidraw
-          excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
+          excalidrawAPI={(api: ExcalidrawAPIRefValue) => {
+            // Debug aid: `window.__excalidrawAPI` in devtools
+            ;(window as any).__excalidrawAPI = api
+            setExcalidrawAPI(api)
+          }}
           isCollaborating={true}
           onPointerUpdate={onPointerUpdate}
           onChange={(_elements, appState) => {

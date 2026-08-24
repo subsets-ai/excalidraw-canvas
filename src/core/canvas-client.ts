@@ -378,6 +378,10 @@ export interface HealthStatus {
   // Identity fields (v1.1+); `stop` requires both before signaling anything
   service?: string;
   pid?: number;
+  // Rooms (this fork)
+  room?: string;
+  rooms?: number;
+  persistence?: boolean;
 }
 
 export async function getHealth(timeoutMs = 2000): Promise<HealthStatus> {

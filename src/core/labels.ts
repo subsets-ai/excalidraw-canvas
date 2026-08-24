@@ -41,7 +41,9 @@ export function makeBoundText(parent: ServerElement, text: string, existing?: Se
   const id = existing?.id ?? `${parent.id}${LABEL_SUFFIX}`;
   const isArrow = parent.type === 'arrow' || parent.type === 'line';
   const fontSize = (existing as any)?.fontSize ?? (parent as any).fontSize ?? 20;
-  const fontFamily = normalizeFontFamily((existing as any)?.fontFamily ?? (parent as any).fontFamily) ?? 1;
+  // Excalifont (5) is Excalidraw's default and is loaded eagerly; legacy
+  // Virgil (1) loads lazily, so labels measured before it arrives get clipped
+  const fontFamily = normalizeFontFamily((existing as any)?.fontFamily ?? (parent as any).fontFamily) ?? 5;
   const box = estimateTextBox(text, fontSize);
 
   let x: number, y: number;

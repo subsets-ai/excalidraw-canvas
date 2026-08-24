@@ -62,6 +62,9 @@ export async function status(argv: string[]): Promise<void> {
     url: EXPRESS_SERVER_URL,
     // Prefer the pid the server reports about itself; the pidfile can be stale
     pid: health.pid ?? readPidFile(canvasPort()) ?? undefined,
+    room: health.room,
+    rooms: health.rooms,
+    persistence: health.persistence,
     elements: health.elements_count,
     browserClients: health.websocket_clients,
     ...sync
