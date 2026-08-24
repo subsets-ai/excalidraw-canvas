@@ -46,10 +46,16 @@ if ! command -v caddy >/dev/null; then
   apt-get update && apt-get install -y caddy
 fi
 
-# 3. Containers never talk to the GCE metadata server: the VM's service
-# account is for the host (secret fetch, image pull), not for the app.
+# 3. Containers never talk to the GCE metadata server's HTTP API: the VM's
+# service account is for the host (secret fetch, image pull), not for the
+# app. DNS (port 53) must stay open — on GCE the host resolver IS the
+# metadata server, and Docker's embedded DNS forwards to it.
 docker network inspect excalidraw >/dev/null 2>&1 || docker network create excalidraw
 iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+for proto in udp tcp; do
+  iptables -C DOCKER-USER -d 169.254.169.254 -p $proto --dport 53 -j RETURN 2>/dev/null ||
+    iptables -I DOCKER-USER 1 -d 169.254.169.254 -p $proto --dport 53 -j RETURN
+done
 
 # 4. Let root's docker authenticate to Artifact Registry via the VM service account.
 gcloud auth configure-docker europe-west1-docker.pkg.dev -q
