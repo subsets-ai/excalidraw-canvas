@@ -28,6 +28,8 @@ export interface ExcalidrawElementBase {
   boundElements?: readonly ExcalidrawBoundElement[] | null;
   updated?: number;
   containerId?: string | null;
+  // Fractional index = z-order (see rooms.ts sortByIndex)
+  index?: string | null;
 }
 
 export interface ExcalidrawTextElement extends ExcalidrawElementBase {

@@ -287,6 +287,16 @@ try {
   eq(rlOut.current, 'gamma', 'rooms list reports current room');
   check((rlOut.rooms || []).some(r => r.id === 'pro-2050-wrong-experiment-objective'), 'rooms list includes created room');
 
+  // ---- z-order: reads are sorted by fractional index, not insertion order
+  console.log('z-order');
+  await api('zorder', '/api/elements/reconcile', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'z-first-inserted', type: 'rectangle', x: 0, y: 0, width: 10, height: 10, version: 1, versionNonce: 1, index: 'a2' },
+    { id: 'z-second-inserted', type: 'rectangle', x: 0, y: 0, width: 10, height: 10, version: 1, versionNonce: 1, index: 'a1' },
+    { id: 'z-no-index', type: 'rectangle', x: 0, y: 0, width: 10, height: 10, version: 1, versionNonce: 1 }
+  ] }) });
+  r = await api('zorder', '/api/elements');
+  eq(r.body.elements.map(e => e.id), ['z-second-inserted', 'z-first-inserted', 'z-no-index'], 'elements listed in index order, index-less last');
+
   // ---- persistence across restart
   console.log('persistence');
   await new Promise(r => setTimeout(r, 500)); // let the debounced save land

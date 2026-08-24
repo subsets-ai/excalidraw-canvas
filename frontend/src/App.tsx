@@ -130,7 +130,21 @@ function saveUsername(name: string): void {
   try { window.localStorage?.setItem(NAME_STORAGE_KEY, name) } catch { /* ignore */ }
 }
 
-// ─── Element helpers (unchanged from upstream) ─────────────────────────
+// ─── Element helpers ───────────────────────────────────────────────────
+
+// Excalidraw's restore/reconcile expect elements in z-order (monotonic
+// fractional `index`); anything else is "repaired" by array position, which
+// silently undoes bring-to-front / send-to-back. Sort before handing scenes
+// to Excalidraw. Index-less elements keep their relative order at the end.
+const compareByIndex = (a: { index?: string | null; id?: string }, b: { index?: string | null; id?: string }): number => {
+  const ai = typeof a.index === 'string' ? a.index : null
+  const bi = typeof b.index === 'string' ? b.index : null
+  if (ai !== null && bi !== null) return ai < bi ? -1 : ai > bi ? 1 : ((a.id ?? '') < (b.id ?? '') ? -1 : (a.id ?? '') > (b.id ?? '') ? 1 : 0)
+  if (ai !== null) return -1
+  if (bi !== null) return 1
+  return 0
+}
+const sortByIndex = <T extends { index?: string | null; id?: string }>(elements: T[]): T[] => elements.slice().sort(compareByIndex)
 
 const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawElement> => {
   const {
@@ -563,11 +577,10 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     })
     merged.push(...incomingById.values())
 
-    const converted = convertElementsPreservingImageProps(merged)
-    // Agent-created labels arrive with estimated text metrics; let Excalidraw
-    // re-measure and re-wrap them against their containers (the same pass it
-    // runs when opening a .excalidraw file), otherwise glyphs get clipped.
-    const needsMeasure = incoming.some(el => el.type === 'text' && el.source !== 'browser')
+    const converted = convertElementsPreservingImageProps(sortByIndex(merged as any))
+    // Text metrics from elsewhere are never trusted (see remeasureText); the
+    // synchronous pass here gives a first fit, the font-aware pass follows.
+    const needsMeasure = incoming.some(el => el.type === 'text')
     const restored = needsMeasure
       ? restoreElements(converted as any, null, { refreshDimensions: true, repairBindings: true })
       : converted
@@ -609,41 +622,75 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     }
   }, [excalidrawAPI, isConnected])
 
-  // Excalidraw loads fonts lazily; text measured before a font arrives is too
-  // narrow and renders clipped. Re-measure the scene whenever a font batch
-  // finishes loading (same pass Excalidraw runs when opening a file).
-  const remeasureText = (): void => {
+  // Excalidraw loads fonts lazily; text measured before its font arrives is
+  // too narrow and renders clipped at both ends. That wrong width can come
+  // from anywhere — the server's estimate for agent labels, or another tab
+  // that measured too early and synced it — so every text element that
+  // reaches this tab is re-measured here once its font is loaded (the same
+  // pass Excalidraw runs when opening a file). Only the given ids (plus
+  // their containers, needed for wrapping) are touched; versions are kept,
+  // so the corrected copy replaces the local one without a sync round-trip.
+  const remeasureText = (ids?: Set<string>): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
     const current = api.getSceneElementsIncludingDeleted()
-    if (!current.some(el => el.type === 'text')) return
-    const restored = restoreElements(current as any, null, { refreshDimensions: true, repairBindings: false })
+    const byId = new Map(current.map(el => [el.id, el]))
+    const subset = current.filter(el => {
+      if (el.isDeleted) return false
+      if (!ids) return true
+      if (ids.has(el.id)) return true
+      // containers of the texts being re-measured
+      return current.some(t => t.type === 'text' && ids.has(t.id) && (t as any).containerId === el.id)
+    })
+    if (!subset.some(el => el.type === 'text')) return
+    // restore needs the container in the same list to wrap bound text
+    const withContainers = [...subset]
+    for (const el of subset) {
+      const cid = (el as any).containerId
+      if (el.type === 'text' && cid && !withContainers.some(x => x.id === cid) && byId.has(cid)) {
+        withContainers.push(byId.get(cid)!)
+      }
+    }
+    // Excalidraw only honours refreshDimensions together with repairBindings
+    // (restore.ts returns early otherwise); bindings are repaired against
+    // this subset only, so keep just the re-measured text elements.
+    const restored = restoreElements(sortByIndex(withContainers as any) as any, null, { refreshDimensions: true, repairBindings: true })
+    const changed = restored.filter(r => {
+      if (r.type !== 'text') return false
+      const local = byId.get(r.id)
+      return local && (local.width !== r.width || local.height !== r.height || local.x !== r.x || local.y !== r.y || (local as any).text !== (r as any).text)
+    })
+    if (changed.length === 0) return
+    const reconciled = reconcileElements(current, changed as any, api.getAppState())
     applySceneUpdateWithoutAutoSync(api, {
-      elements: restored,
+      elements: reconciled,
       captureUpdate: CaptureUpdateAction.NEVER
     })
   }
 
   // Make sure the fonts these text elements use are actually loaded, then
-  // re-measure. Excalidraw registers its font faces up front but only loads
-  // them on demand, so measuring right after updateScene uses the fallback.
-  const remeasureAfterFonts = (elements: Array<{ type?: string; fontFamily?: number | string; fontSize?: number }>): void => {
+  // re-measure them. Excalidraw registers its font faces up front but only
+  // loads them on demand, so measuring right after updateScene may use the
+  // fallback font.
+  const remeasureAfterFonts = (elements: Array<{ id?: string; type?: string; fontFamily?: number | string; fontSize?: number }>): void => {
     if (typeof document === 'undefined' || !document.fonts) return
     const idToName = new Map<number, string>(Object.entries(FONT_FAMILY).map(([name, id]) => [id as number, name]))
     const specs = new Set<string>()
+    const ids = new Set<string>()
     for (const el of elements) {
-      if (el.type !== 'text') continue
+      if (el.type !== 'text' || !el.id) continue
+      ids.add(el.id)
       const name = idToName.get(Number(el.fontFamily))
       if (name) specs.add(`${el.fontSize ?? 20}px "${name}"`)
     }
-    if (specs.size === 0) return
+    if (ids.size === 0) return
     Promise.all(Array.from(specs).map(spec => document.fonts.load(spec).catch(() => [])))
-      .then(() => remeasureText())
+      .then(() => remeasureText(ids))
       .catch(() => { /* ignore */ })
   }
   useEffect(() => {
     if (!excalidrawAPI || typeof document === 'undefined' || !document.fonts) return
-    const onFonts = (): void => { setTimeout(remeasureText, 0) }
+    const onFonts = (): void => { setTimeout(() => remeasureText(), 0) }
     document.fonts.addEventListener('loadingdone', onFonts)
     return () => document.fonts.removeEventListener('loadingdone', onFonts)
   }, [excalidrawAPI])

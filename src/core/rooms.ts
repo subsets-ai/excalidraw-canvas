@@ -205,14 +205,34 @@ export function deleteRoom(id: string): boolean {
   return existed;
 }
 
+// Z-order lives in each element's fractional `index` (a string; plain
+// lexicographic order is the draw order). Elements are stored in a Map in
+// insertion order, so every read sorts: Excalidraw's restore/reconcile
+// treat an array whose indices aren't monotonic as corrupt and rewrite the
+// indices by position — which is exactly how "bring to front" got undone on
+// every reload. Elements without an index keep insertion order at the end.
+export function compareByIndex(a: ServerElement, b: ServerElement): number {
+  const ai = typeof a.index === 'string' ? a.index : null;
+  const bi = typeof b.index === 'string' ? b.index : null;
+  if (ai !== null && bi !== null) return ai < bi ? -1 : ai > bi ? 1 : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  if (ai !== null) return -1;
+  if (bi !== null) return 1;
+  return 0;
+}
+
+export function sortByIndex(elements: ServerElement[]): ServerElement[] {
+  // Array.prototype.sort is stable: index-less elements keep insertion order
+  return elements.slice().sort(compareByIndex);
+}
+
 export function liveElements(room: Room): ServerElement[] {
   const out: ServerElement[] = [];
   room.elements.forEach(el => { if (!el.isDeleted) out.push(el); });
-  return out;
+  return sortByIndex(out);
 }
 
 export function allElements(room: Room): ServerElement[] {
-  return Array.from(room.elements.values());
+  return sortByIndex(Array.from(room.elements.values()));
 }
 
 // Mark a room as changed: bumps updatedAt and schedules a persist.
