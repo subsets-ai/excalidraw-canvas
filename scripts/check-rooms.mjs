@@ -28,7 +28,7 @@ function eq(a, b, msg) { check(JSON.stringify(a) === JSON.stringify(b), `${msg} 
 function startServer(extraEnv = {}) {
   const child = spawn(process.execPath, [serverPath], {
     cwd: repoRoot,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, LOG_LEVEL: 'error', ...extraEnv },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, LOG_LEVEL: 'error', TOMBSTONE_RESURRECT_GRACE_MS: '400', ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr.on('data', d => process.stderr.write(d));
@@ -286,6 +286,22 @@ try {
   const rlOut = rl.status === 0 ? JSON.parse(rl.stdout) : {};
   eq(rlOut.current, 'gamma', 'rooms list reports current room');
   check((rlOut.rooms || []).some(r => r.id === 'pro-2050-wrong-experiment-objective'), 'rooms list includes created room');
+
+  // ---- re-import: a tombstoned id is resurrected after the grace period
+  console.log('resurrection');
+  const imp = { id: 'imp1', type: 'rectangle', x: 1, y: 1, width: 9, height: 9, version: 4, versionNonce: 4 };
+  await api('imp', '/api/elements/reconcile', { method: 'POST', body: JSON.stringify({ elements: [imp] }) });
+  await api('imp', '/api/elements/imp1', { method: 'DELETE' });
+  // fresh tombstone: stale echo still rejected
+  r = await api('imp', '/api/elements/reconcile', { method: 'POST', body: JSON.stringify({ elements: [imp] }) });
+  eq(r.body.accepted, [], 'echo within grace rejected');
+  await new Promise(res => setTimeout(res, 600));
+  // late re-import (same id, old version): accepted, version bumped past the tombstone
+  r = await api('imp', '/api/elements/reconcile', { method: 'POST', body: JSON.stringify({ elements: [imp] }) });
+  eq(r.body.accepted, ['imp1'], 'late re-import resurrects');
+  check(r.body.rejected.length === 1 && r.body.rejected[0].version > 5, 'sender told to adopt bumped version');
+  r = await api('imp', '/api/elements/imp1');
+  eq(r.status, 200, 'element live again');
 
   // ---- z-order: reads are sorted by fractional index, not insertion order
   console.log('z-order');

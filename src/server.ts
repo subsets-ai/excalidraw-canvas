@@ -1158,6 +1158,20 @@ const ReconcileElementSchema = z.object({
   isDeleted: z.boolean().optional()
 }).passthrough().refine(obj => Object.keys(obj).length <= 200, { message: 'too many keys' });
 
+// A deleted element's tombstone must beat late echoes from stale tabs — but
+// a deliberate re-import (opening a previously exported .excalidraw with the
+// same ids) arrives much later and must win, or the whole import silently
+// vanishes on refresh. After the grace period a resurrection is accepted and
+// version-bumped past the tombstone; the stored copy is returned in
+// `rejected` so the sender adopts the new version numbers.
+const TOMBSTONE_RESURRECT_GRACE_MS = parseInt(process.env.TOMBSTONE_RESURRECT_GRACE_MS || '60000', 10);
+
+function isLateResurrection(existing: ServerElement | undefined, incoming: ServerElement): boolean {
+  if (!existing?.isDeleted || incoming.isDeleted) return false;
+  const t = Date.parse(existing.updatedAt ?? '');
+  return Number.isNaN(t) ? true : Date.now() - t > TOMBSTONE_RESURRECT_GRACE_MS;
+}
+
 app.post('/api/elements/reconcile', (req: Request, res: Response) => {
   try {
     const room = req.room;
@@ -1206,6 +1220,13 @@ app.post('/api/elements/reconcile', (req: Request, res: Response) => {
         if (existing && existing.version === incoming.version && existing.versionNonce === incoming.versionNonce) continue;
         room.elements.set(incoming.id, incoming);
         accepted.push(incoming);
+      } else if (isLateResurrection(existing, incoming)) {
+        incoming.version = Math.max(incoming.version ?? 0, existing!.version ?? 0) + 1;
+        incoming.versionNonce = randomNonce();
+        room.elements.set(incoming.id, incoming);
+        accepted.push(incoming);
+        // Sender must adopt the bumped version or its next edit loses
+        rejected.push(incoming);
       } else if (existing) {
         rejected.push(existing);
       }
