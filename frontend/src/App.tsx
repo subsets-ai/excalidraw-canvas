@@ -317,6 +317,16 @@ const restoreBindings = (
     if (orig.isDeleted !== undefined) patched.isDeleted = orig.isDeleted;
     if (orig.version !== undefined) patched.version = orig.version;
     if (orig.versionNonce !== undefined) patched.versionNonce = orig.versionNonce;
+    // Fixed-width text keeps its authored layout: convert re-measures text
+    // to content width, which shrinks deliberately sized table cells and
+    // re-clips them (and worse when fonts haven't loaded yet).
+    if (el.type === 'text' && orig.autoResize === false) {
+      if (orig.width !== undefined) patched.width = orig.width;
+      if (orig.height !== undefined) patched.height = orig.height;
+      if (orig.x !== undefined) patched.x = orig.x;
+      if (orig.y !== undefined) patched.y = orig.y;
+      if (orig.text !== undefined) patched.text = orig.text;
+    }
 
     return patched;
   });
@@ -578,11 +588,19 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     merged.push(...incomingById.values())
 
     const converted = convertElementsPreservingImageProps(sortByIndex(merged as any))
-    // Text metrics from elsewhere are never trusted (see remeasureText); the
-    // synchronous pass here gives a first fit, the font-aware pass follows.
-    const needsMeasure = incoming.some(el => el.type === 'text')
+    // Text metrics from elsewhere are never trusted for auto-sized text (see
+    // remeasureText); the synchronous pass here gives a first fit, the
+    // font-aware pass follows. Fixed-width text (autoResize: false) is laid
+    // out deliberately — a refresh would shrink it to its content width and
+    // re-wrap it, so it is taken as-is (Excalidraw itself loads files with
+    // refreshDimensions off).
+    const isFixedWidthText = (el: { type?: string; autoResize?: boolean } | undefined): boolean =>
+      el?.type === 'text' && (el as any).autoResize === false
+    const needsMeasure = incoming.some(el => el.type === 'text' && !isFixedWidthText(el as any))
     const restored = needsMeasure
-      ? restoreElements(converted as any, null, { refreshDimensions: true, repairBindings: true })
+      ? restoreElements(converted as any, null, { refreshDimensions: true, repairBindings: true }).map(el =>
+          isFixedWidthText(el as any) ? (converted.find(c => c.id === el.id) ?? el) : el
+        )
       : converted
     const incomingIds = new Set(incoming.map(el => el.id))
     const remote = restored.filter(el => el.id && incomingIds.has(el.id))
@@ -637,6 +655,8 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     const byId = new Map(current.map(el => [el.id, el]))
     const subset = current.filter(el => {
       if (el.isDeleted) return false
+      // Fixed-width text keeps its authored layout (see applyRemoteElements)
+      if (el.type === 'text' && (el as any).autoResize === false) return false
       if (!ids) return true
       if (ids.has(el.id)) return true
       // containers of the texts being re-measured
@@ -656,7 +676,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     // this subset only, so keep just the re-measured text elements.
     const restored = restoreElements(sortByIndex(withContainers as any) as any, null, { refreshDimensions: true, repairBindings: true })
     const changed = restored.filter(r => {
-      if (r.type !== 'text') return false
+      if (r.type !== 'text' || (r as any).autoResize === false) return false
       const local = byId.get(r.id)
       return local && (local.width !== r.width || local.height !== r.height || local.x !== r.x || local.y !== r.y || (local as any).text !== (r as any).text)
     })
@@ -679,6 +699,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     const ids = new Set<string>()
     for (const el of elements) {
       if (el.type !== 'text' || !el.id) continue
+      if ((el as any).autoResize === false) continue
       ids.add(el.id)
       const name = idToName.get(Number(el.fontFamily))
       if (name) specs.add(`${el.fontSize ?? 20}px "${name}"`)
