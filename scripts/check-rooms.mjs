@@ -287,6 +287,19 @@ try {
   eq(rlOut.current, 'gamma', 'rooms list reports current room');
   check((rlOut.rooms || []).some(r => r.id === 'pro-2050-wrong-experiment-objective'), 'rooms list includes created room');
 
+  // ---- GETs never create rooms; deleted rooms stay deleted
+  console.log('room lifecycle');
+  r = await api('ghost-room', '/api/elements');
+  eq(r.status, 200, 'GET on nonexistent room answers empty');
+  r = await api(null, '/api/rooms');
+  check(!r.body.rooms.some(x => x.id === 'ghost-room'), 'plain GET did not create the room');
+  await api(null, '/api/rooms', { method: 'POST', body: JSON.stringify({ id: 'shortlived' }) });
+  await api(null, '/api/rooms/shortlived', { method: 'DELETE' });
+  await api('shortlived', '/api/files');
+  await api('shortlived', '/api/elements');
+  r = await api(null, '/api/rooms');
+  check(!r.body.rooms.some(x => x.id === 'shortlived'), 'reads after delete do not resurrect the room');
+
   // ---- re-import: a tombstoned id is resurrected after the grace period
   console.log('resurrection');
   const imp = { id: 'imp1', type: 'rectangle', x: 1, y: 1, width: 9, height: 9, version: 4, versionNonce: 4 };

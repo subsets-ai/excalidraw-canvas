@@ -141,6 +141,21 @@ export function getRoom(id: string = DEFAULT_ROOM_ID): Room {
   return room;
 }
 
+// Read-only access: an existing room (memory or disk) is returned and
+// registered; a nonexistent one comes back as a transient object that is
+// never added to the registry — a plain GET must not create rooms (it made
+// deleted rooms reappear the moment any straggling read arrived).
+export function peekRoom(id: string = DEFAULT_ROOM_ID): Room {
+  const existing = rooms.get(id);
+  if (existing) return existing;
+  const loaded = loadRoomFromDisk(id);
+  if (loaded) {
+    rooms.set(id, loaded);
+    return loaded;
+  }
+  return newRoom(id);
+}
+
 export function hasRoom(id: string): boolean {
   if (rooms.has(id)) return true;
   return !!dataDir && fs.existsSync(roomFilePath(id));

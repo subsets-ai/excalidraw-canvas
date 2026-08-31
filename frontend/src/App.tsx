@@ -358,6 +358,34 @@ const convertElementsPreservingImageProps = (
 
 const REPO = 'github:subsets-ai/excalidraw-canvas'
 
+// Two-step destructive button: first click arms it ("Really …?"), second
+// click within 4s fires; anything else reverts. No blocking dialogs.
+function ConfirmButton({ label, confirmLabel, onConfirm, className }: {
+  label: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  className?: string;
+}): JSX.Element {
+  const [armed, setArmed] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+  const click = (): void => {
+    if (!armed) {
+      setArmed(true)
+      timerRef.current = setTimeout(() => setArmed(false), 4000)
+      return
+    }
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setArmed(false)
+    onConfirm()
+  }
+  return (
+    <button type="button" className={`${className ?? 'btn-secondary'}${armed ? ' btn-armed' : ''}`} onClick={click}>
+      {armed ? confirmLabel : label}
+    </button>
+  )
+}
+
 function CopyBlock({ text }: { text: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const copy = async (): Promise<void> => {
@@ -421,7 +449,7 @@ function RoomPicker(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
 
-  useEffect(() => {
+  const loadRooms = (): void => {
     fetch('/api/rooms')
       .then(r => r.json())
       .then((data: { success: boolean; rooms?: RoomSummary[]; error?: string }) => {
@@ -429,7 +457,20 @@ function RoomPicker(): JSX.Element {
         else setError(data.error || 'Failed to load rooms')
       })
       .catch(err => setError((err as Error).message))
-  }, [])
+  }
+  useEffect(loadRooms, [])
+
+  const deleteRoom = async (id: string): Promise<void> => {
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) setError(result.error || `Failed to delete "${id}"`)
+      else setError(null)
+    } catch (err) {
+      setError((err as Error).message)
+    }
+    loadRooms()
+  }
 
   const openRoom = (id: string): void => {
     window.location.href = `/r/${encodeURIComponent(id)}`
@@ -471,6 +512,14 @@ function RoomPicker(): JSX.Element {
                 {room.clients > 0 ? ` · ${room.clients} online` : ''}
                 {' · '}updated {new Date(room.updatedAt).toLocaleString()}
               </span>
+              {room.id !== 'default' && (
+                <ConfirmButton
+                  className="btn-ghost btn-delete"
+                  label="Delete"
+                  confirmLabel="Really delete?"
+                  onConfirm={() => { void deleteRoom(room.id) }}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -492,6 +541,9 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   const [isConnected, setIsConnected] = useState<boolean>(false)
   const websocketRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>('')
+  // Once the room is deleted, nothing may reconnect — a rejoin would
+  // silently recreate the room on the server
+  const roomDeletedRef = useRef<boolean>(false)
 
   const [username, setUsername] = useState<string>(loadUsername)
   const usernameRef = useRef<string>(username)
@@ -651,6 +703,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
 
   useEffect(() => {
     if (excalidrawAPI) {
+      if (roomDeletedRef.current) return
       loadExistingElements()
       if (!isConnected) connectWebSocket()
       const queued = pendingMessagesRef.current
@@ -777,6 +830,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   }
 
   const connectWebSocket = (): void => {
+    if (roomDeletedRef.current) return
     if (websocketRef.current &&
         (websocketRef.current.readyState === WebSocket.CONNECTING ||
          websocketRef.current.readyState === WebSocket.OPEN)) {
@@ -910,6 +964,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
             captureUpdate: CaptureUpdateAction.NEVER
           })
           if (data.reason === 'room_deleted') {
+            roomDeletedRef.current = true
             setSyncError('This room was deleted.')
           }
           break
@@ -1182,12 +1237,27 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   }
 
   const clearCanvas = async (): Promise<void> => {
-    if (!window.confirm(`Clear every element in room "${roomId}" for everyone?`)) return
     try {
       await roomFetch('/api/elements/clear', { method: 'DELETE' })
       // The server broadcasts canvas_cleared back to us
     } catch (error) {
       console.error('Error clearing canvas:', error)
+    }
+  }
+
+  const deleteRoom = async (): Promise<void> => {
+    roomDeletedRef.current = true
+    try {
+      const response = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' })
+      if (response.ok) {
+        window.location.href = '/'
+      } else {
+        roomDeletedRef.current = false
+        const result = await response.json().catch(() => ({} as ApiResponse))
+        setSyncError((result as ApiResponse).error || 'Failed to delete room')
+      }
+    } catch (error) {
+      setSyncError((error as Error).message)
     }
   }
 
@@ -1252,7 +1322,10 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
           )}
-          <button className="btn-secondary" onClick={clearCanvas}>Clear room</button>
+          <ConfirmButton className="btn-secondary" label="Clear room" confirmLabel="Really clear?" onConfirm={() => { void clearCanvas() }} />
+          {roomId !== 'default' && (
+            <ConfirmButton className="btn-secondary btn-delete" label="Delete room" confirmLabel="Really delete?" onConfirm={() => { void deleteRoom() }} />
+          )}
         </div>
       </div>
 
