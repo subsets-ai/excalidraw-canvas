@@ -196,6 +196,13 @@ const validateAndFixBindings = (elements: Partial<ExcalidrawElement>[]): Partial
 
 const isImageElement = (element: Partial<ExcalidrawElement>): boolean => element.type === 'image'
 const isFreedrawElement = (element: Partial<ExcalidrawElement>): boolean => element.type === 'freedraw'
+// Types convertToExcalidrawElements cannot take as real elements: its frame
+// branch expects a skeleton with a `children` array and crashes on a frame
+// coming from a file or another tab; embeddable/iframe aren't skeletons
+// either. These are already complete elements — pass them through.
+const isPassthroughElement = (element: Partial<ExcalidrawElement>): boolean =>
+  element.type === 'frame' || element.type === 'magicframe' ||
+  element.type === 'embeddable' || element.type === 'iframe'
 const isShapeContainerType = (type: string | undefined): boolean =>
   type === 'rectangle' || type === 'ellipse' || type === 'diamond'
 
@@ -340,10 +347,11 @@ const convertElementsPreservingImageProps = (
   const validatedElements = validateAndFixBindings(elements)
   const imageElements = validatedElements.filter(isImageElement).map(normalizeImageElement)
   const freedrawElements = validatedElements.filter(isFreedrawElement).map(normalizeFreedrawElement)
-  const nonImageElements = validatedElements.filter(el => !isImageElement(el) && !isFreedrawElement(el))
+  const passthroughElements = validatedElements.filter(isPassthroughElement)
+  const nonImageElements = validatedElements.filter(el => !isImageElement(el) && !isFreedrawElement(el) && !isPassthroughElement(el))
   const convertedNonImageElements = convertToExcalidrawElements(nonImageElements as any, { regenerateIds: false })
   const restoredNonImageElements = restoreBindings(convertedNonImageElements, nonImageElements)
-  return recenterBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements])
+  return recenterBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements, ...passthroughElements])
 }
 
 // ─── Room picker (served at "/") ───────────────────────────────────────
@@ -589,7 +597,16 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     })
     merged.push(...incomingById.values())
 
-    const converted = convertElementsPreservingImageProps(sortByIndex(merged as any))
+    // One exotic element must never blank the whole room: if conversion
+    // throws, fall back to the raw merged scene (real elements render fine
+    // without the convert pass; only agent shorthand loses polish).
+    let converted: Partial<ExcalidrawElement>[]
+    try {
+      converted = convertElementsPreservingImageProps(sortByIndex(merged as any))
+    } catch (error) {
+      console.error('convert failed, applying raw elements:', error)
+      converted = sortByIndex(merged as any)
+    }
     // Text metrics from elsewhere are never trusted for auto-sized text (see
     // remeasureText); the synchronous pass here gives a first fit, the
     // font-aware pass follows. Fixed-width text (autoResize: false) is laid
