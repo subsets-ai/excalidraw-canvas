@@ -34,6 +34,7 @@ import {
   configurePersistence,
   persistenceDir,
   getRoom,
+  peekRoom,
   hasRoom,
   listRooms,
   deleteRoom,
@@ -123,7 +124,8 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
       error: `Invalid room id. Use 1-64 chars of a-z, 0-9, "-" or "_".`
     });
   }
-  req.room = getRoom(id);
+  // Reads must not create rooms; writes and WebSocket joins do.
+  req.room = req.method === 'GET' ? peekRoom(id) : getRoom(id);
   next();
 });
 
@@ -1716,7 +1718,7 @@ app.get('/r/:room', serveFrontend);
 // Health check endpoint (room-aware via header/query, default room otherwise)
 app.get('/health', (req: Request, res: Response) => {
   const roomId = requestedRoomId(req) ?? DEFAULT_ROOM_ID;
-  const room = getRoom(roomId);
+  const room = peekRoom(roomId);
   res.json({
     status: 'healthy',
     timestamp: nowIso(),
