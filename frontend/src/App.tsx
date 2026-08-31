@@ -522,6 +522,8 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
   const suppressAutoSyncCountRef = useRef<number>(0)
   // What the server holds, as far as this tab knows — the diff base for sync
   const knownVersionsRef = useRef<Map<string, VersionKey>>(new Map())
+  // Image files the server already has (or that failed permanently)
+  const knownFileIdsRef = useRef<Set<string>>(new Set())
 
   // Messages that arrive before the Excalidraw API exists (cold load: the
   // socket's initial_elements can beat the editor mount) are replayed later
@@ -722,6 +724,7 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
       if (filesResponse.ok) {
         const filesResult = await filesResponse.json() as ApiResponse
         if (filesResult.files) {
+          Object.keys(filesResult.files).forEach(id => knownFileIdsRef.current.add(id))
           excalidrawAPIRef.current?.addFiles(Object.values(filesResult.files) as any)
         }
       }
@@ -843,11 +846,17 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
       switch (data.type) {
         case 'initial_elements':
           if (data.elements) applyRemoteElements(data.elements)
-          if (data.files) excalidrawAPI.addFiles(Object.values(data.files) as any)
+          if (data.files) {
+            Object.keys(data.files).forEach(id => knownFileIdsRef.current.add(id))
+            excalidrawAPI.addFiles(Object.values(data.files) as any)
+          }
           break
 
         case 'files_added':
-          if (Array.isArray(data.files)) excalidrawAPI.addFiles(data.files)
+          if (Array.isArray(data.files)) {
+            data.files.forEach((f: any) => { if (f?.id) knownFileIdsRef.current.add(f.id) })
+            excalidrawAPI.addFiles(data.files)
+          }
           break
 
         case 'element_created':
@@ -1055,6 +1064,30 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
     }
   }
 
+  // Images pasted or dropped into this tab exist only locally until their
+  // BinaryFiles are pushed; without this they vanish on refresh.
+  const syncFilesToBackend = async (): Promise<void> => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const files = Object.values(api.getFiles() ?? {}) as Array<{ id: string; dataURL: string; mimeType?: string; created?: number }>
+    const fresh = files.filter(f => f?.id && f.dataURL && !knownFileIdsRef.current.has(f.id))
+    for (const f of fresh) {
+      try {
+        const response = await roomFetch('/api/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: [f] })
+        })
+        if (response.ok) {
+          knownFileIdsRef.current.add(f.id)
+        } else if (response.status === 413) {
+          knownFileIdsRef.current.add(f.id) // don't retry forever
+          setSyncError('An image is too large to sync (5 MB max) — it will not survive a refresh.')
+        }
+      } catch { /* retried on the next sync */ }
+    }
+  }
+
   // Diff-based sync: send only elements whose version/versionNonce differ
   // from what the server is known to hold.
   const syncToBackend = async (): Promise<void> => {
@@ -1070,6 +1103,8 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
       clearTimeout(autoSyncTimerRef.current)
       autoSyncTimerRef.current = null
     }
+
+    void syncFilesToBackend()
 
     const known = knownVersionsRef.current
     const changed: ExcalidrawElement[] = []
@@ -1206,7 +1241,14 @@ function Canvas({ roomId }: { roomId: string }): JSX.Element {
 
       <div className="canvas-container">
         <Excalidraw
-          excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
+          excalidrawAPI={(api: ExcalidrawAPIRefValue) => {
+            // Dev-only hook for local debugging/tests; never exposed on a
+            // deployed host (see security review L10).
+            if (['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+              ;(window as any).__excalidrawAPI = api
+            }
+            setExcalidrawAPI(api)
+          }}
           isCollaborating={true}
           onPointerUpdate={onPointerUpdate}
           onChange={(_elements, appState) => {
