@@ -48,6 +48,7 @@ import {
   colorFor,
   publicCollaborator,
   stampUpdate,
+  arrowEndpointIds,
   attachArrowBackrefs,
   detachArrowBackrefs
 } from './core/rooms.js';
@@ -543,19 +544,28 @@ function resolveArrowBindings(room: Room, batchElements: ServerElement[]): void 
     if (el.type !== 'arrow' && el.type !== 'line') continue;
     const startRef = (el as any).start as { id: string } | undefined;
     const endRef = (el as any).end as { id: string } | undefined;
+    const startId = startRef?.id ?? (el as any).startBinding?.elementId;
+    const endId = endRef?.id ?? (el as any).endBinding?.elementId;
 
-    if (!startRef && !endRef) continue;
+    if (!startId && !endId) continue;
 
-    const startEl = startRef ? elementMap.get(startRef.id) : undefined;
-    const endEl = endRef ? elementMap.get(endRef.id) : undefined;
+    const startEl = startId ? elementMap.get(startId) : undefined;
+    const endEl = endId ? elementMap.get(endId) : undefined;
 
     // Elbowed + bound: Manhattan-route between the two boxes instead of a
-    // straight segment (this is what "use elbow arrows" should mean)
+    // straight segment, and pin the endpoints as fixedPoint bindings so the
+    // browser's own elbow router keeps this shape when boxes are dragged.
+    // The start/end shorthand refs are dropped: the frontend would otherwise
+    // recompute center-anchored bindings from them and override ours.
     if ((el as any).elbowed && startEl && endEl) {
       const route = elbowRoute(startEl, endEl);
       el.x = route.x;
       el.y = route.y;
       el.points = route.points;
+      (el as any).startBinding = { elementId: startEl.id, focus: 0, gap: 4, fixedPoint: route.startAnchor };
+      (el as any).endBinding = { elementId: endEl.id, focus: 0, gap: 4, fixedPoint: route.endAnchor };
+      delete (el as any).start;
+      delete (el as any).end;
       continue;
     }
 
@@ -607,9 +617,8 @@ function rerouteBoundArrows(room: Room, movedId: string): ServerElement[] {
   room.elements.forEach(el => {
     if (el.isDeleted) return;
     if (el.type !== 'arrow' && el.type !== 'line') return;
-    const startRef = (el as any).start as { id: string } | undefined;
-    const endRef = (el as any).end as { id: string } | undefined;
-    if (startRef?.id !== movedId && endRef?.id !== movedId) return;
+    const ids = arrowEndpointIds(el);
+    if (!ids.includes(movedId)) return;
     resolveArrowBindings(room, [el]);
     stampUpdate(el, el);
     rerouted.push(el);

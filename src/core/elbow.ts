@@ -24,6 +24,17 @@ export interface ElbowRoute {
   x: number;
   y: number;
   points: [number, number][];
+  // Normalized anchors on each box ([0,0]=top-left, [1,1]=bottom-right;
+  // slightly outside for the gap). Stored as binding fixedPoints so
+  // Excalidraw's own elbow router regenerates the same shape when a user
+  // drags a box — without them it re-routes bottom-center to top-center,
+  // straight through stacked siblings.
+  startAnchor: [number, number];
+  endAnchor: [number, number];
+}
+
+function normAnchor(el: Box, x: number, y: number): [number, number] {
+  return [el.w ? (x - el.x) / el.w : 0.5, el.h ? (y - el.y) / el.h : 0.5];
 }
 
 export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowRoute {
@@ -37,7 +48,9 @@ export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowR
   const rightOf = b.x >= a.x + a.w;
   const leftOf = b.x + b.w <= a.x;
 
-  if (below || above) {
+  const xOverlap = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+
+  if ((below || above) && (xOverlap > 0 || !(rightOf || leftOf))) {
     const sy = below ? a.y + a.h + GAP : a.y - GAP;       // leave bottom/top
     const ty = below ? b.y - GAP : b.y + b.h + GAP;       // enter top/bottom
     const midY = (sy + ty) / 2;
@@ -48,6 +61,15 @@ export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowR
       // down, across at the mid-gap, down again (classic tree connector)
       abs.push([a.cx, sy], [a.cx, midY], [b.cx, midY], [b.cx, ty]);
     }
+  } else if ((below || above) && (rightOf || leftOf)) {
+    // Diagonal with no horizontal overlap: crossing at mid-height would cut
+    // through whatever sits between the rows. Leave the source's facing
+    // side at its own row (usually clear), run to a gutter just before the
+    // target column, drop to the target's row, enter its facing side.
+    const sx = rightOf ? a.x + a.w + GAP : a.x - GAP;
+    const tx = rightOf ? b.x - GAP : b.x + b.w + GAP;
+    const gx = rightOf ? b.x - 3 * GAP : b.x + b.w + 3 * GAP;
+    abs.push([sx, a.cy], [gx, a.cy], [gx, b.cy], [tx, b.cy]);
   } else if (rightOf || leftOf) {
     const sx = rightOf ? a.x + a.w + GAP : a.x - GAP;     // leave right/left
     const tx = rightOf ? b.x - GAP : b.x + b.w + GAP;     // enter left/right
@@ -63,5 +85,12 @@ export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowR
   }
 
   const [ox, oy] = abs[0]!;
-  return { x: ox, y: oy, points: abs.map(([px, py]) => [px - ox, py - oy]) };
+  const [ex, ey] = abs[abs.length - 1]!;
+  return {
+    x: ox,
+    y: oy,
+    points: abs.map(([px, py]) => [px - ox, py - oy]),
+    startAnchor: normAnchor(a, ox, oy),
+    endAnchor: normAnchor(b, ex, ey)
+  };
 }

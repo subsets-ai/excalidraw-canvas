@@ -335,6 +335,12 @@ try {
   ] }) });
   r = await api('draw', '/api/elements/el1');
   check((r.body.element.points || []).length === 4, `elbowed bound arrow gets a Manhattan route (${JSON.stringify(r.body.element.points)})`);
+  check(r.body.element.startBinding?.fixedPoint && r.body.element.endBinding?.fixedPoint, 'elbow bindings pinned with fixedPoint anchors');
+  check(!r.body.element.start && !r.body.element.end, 'shorthand refs dropped once bindings are pinned');
+  const beforePts = JSON.stringify(r.body.element.points);
+  await api('draw', '/api/elements/kid', { method: 'PUT', body: JSON.stringify({ x: 900 }) });
+  r = await api('draw', '/api/elements/el1');
+  check(JSON.stringify(r.body.element.points) !== beforePts, 'binding-based elbow arrow re-routes when its box moves');
   // endpoints carry boundElements back-refs so the browser drags arrows along
   r = await api('draw', '/api/elements/top');
   check((r.body.element.boundElements || []).some(b => b.id === 'el1'), 'endpoint box gets boundElements back-ref');
@@ -366,6 +372,16 @@ try {
   ] }) });
   const lint2 = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'lintbad', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
   check(JSON.parse(lint2.stdout).warnings.some(w => w.kind === 'overlap'), 'lint flags overlap');
+
+  // diagonal elbow: no mid-row crossing — route via a gutter at the target
+  await api('diag2', '/api/elements/batch', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'src', type: 'rectangle', x: 0, y: 0, width: 200, height: 80 },
+    { id: 'between', type: 'rectangle', x: 600, y: 200, width: 200, height: 80 },
+    { id: 'tgt', type: 'rectangle', x: 600, y: 400, width: 200, height: 80 },
+    { id: 'dg', type: 'arrow', x: 0, y: 0, elbowed: true, start: { id: 'src' }, end: { id: 'tgt' } }
+  ] }) });
+  const dlint = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'diag2', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  check(!JSON.parse(dlint.stdout).warnings.some(w => w.kind === 'arrow-through-box'), 'diagonal elbow avoids boxes between rows');
 
   // ---- persistence across restart
   console.log('persistence');
