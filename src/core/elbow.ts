@@ -24,6 +24,17 @@ export interface ElbowRoute {
   x: number;
   y: number;
   points: [number, number][];
+  // Normalized anchors on each box ([0,0]=top-left, [1,1]=bottom-right;
+  // slightly outside for the gap). Stored as binding fixedPoints so
+  // Excalidraw's own elbow router regenerates the same shape when a user
+  // drags a box — without them it re-routes bottom-center to top-center,
+  // straight through stacked siblings.
+  startAnchor: [number, number];
+  endAnchor: [number, number];
+}
+
+function normAnchor(el: Box, x: number, y: number): [number, number] {
+  return [el.w ? (x - el.x) / el.w : 0.5, el.h ? (y - el.y) / el.h : 0.5];
 }
 
 export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowRoute {
@@ -74,5 +85,12 @@ export function elbowRoute(startEl: ServerElement, endEl: ServerElement): ElbowR
   }
 
   const [ox, oy] = abs[0]!;
-  return { x: ox, y: oy, points: abs.map(([px, py]) => [px - ox, py - oy]) };
+  const [ex, ey] = abs[abs.length - 1]!;
+  return {
+    x: ox,
+    y: oy,
+    points: abs.map(([px, py]) => [px - ox, py - oy]),
+    startAnchor: normAnchor(a, ox, oy),
+    endAnchor: normAnchor(b, ex, ey)
+  };
 }

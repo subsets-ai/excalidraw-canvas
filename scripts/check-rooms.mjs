@@ -335,6 +335,12 @@ try {
   ] }) });
   r = await api('draw', '/api/elements/el1');
   check((r.body.element.points || []).length === 4, `elbowed bound arrow gets a Manhattan route (${JSON.stringify(r.body.element.points)})`);
+  check(r.body.element.startBinding?.fixedPoint && r.body.element.endBinding?.fixedPoint, 'elbow bindings pinned with fixedPoint anchors');
+  check(!r.body.element.start && !r.body.element.end, 'shorthand refs dropped once bindings are pinned');
+  const beforePts = JSON.stringify(r.body.element.points);
+  await api('draw', '/api/elements/kid', { method: 'PUT', body: JSON.stringify({ x: 900 }) });
+  r = await api('draw', '/api/elements/el1');
+  check(JSON.stringify(r.body.element.points) !== beforePts, 'binding-based elbow arrow re-routes when its box moves');
   // endpoints carry boundElements back-refs so the browser drags arrows along
   r = await api('draw', '/api/elements/top');
   check((r.body.element.boundElements || []).some(b => b.id === 'el1'), 'endpoint box gets boundElements back-ref');
