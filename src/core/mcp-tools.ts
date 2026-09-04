@@ -23,6 +23,63 @@ export const tools: Tool[] = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'lint_scene',
+    description: 'Geometric quality checks on the canvas without a screenshot or browser: overlapping shapes, labels overflowing their boxes, arrows passing through unrelated elements, unbound arrows. Run after drawing; fix what it reports, then screenshot only for final visual sign-off.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'create_diagram',
+    description: 'Build a laid-out diagram in ONE call from semantic nodes/edges/groups: computes a tidy tree/layer layout, sizes boxes from labels, draws group zones, and connects everything with elbow arrows bound to the boxes. Prefer this over placing elements by hand for org charts, flowcharts, and architecture sketches. Node ids become element ids for later edits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodes: {
+          type: 'array',
+          description: 'Boxes. Multi-line labels use \n.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              label: { type: 'string' },
+              group: { type: 'string', description: 'Optional zone; grouped nodes are laid out in side-by-side bands' },
+              color: { type: 'string', description: 'Optional backgroundColor override' },
+              width: { type: 'number' }
+            },
+            required: ['id', 'label']
+          }
+        },
+        edges: {
+          type: 'array',
+          description: 'Connections; first edge into a node also defines its tree parent for layout.',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+              label: { type: 'string' },
+              style: { type: 'string', enum: ['elbow', 'straight'], description: 'default elbow' }
+            },
+            required: ['from', 'to']
+          }
+        },
+        groups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, label: { type: 'string' } },
+            required: ['id']
+          }
+        },
+        origin: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' } },
+          description: 'Top-left of the layout; default 60,40. Offset to place next to existing content.'
+        }
+      },
+      required: ['nodes']
+    }
+  },
+  {
     name: 'create_element',
     description: 'Create a new Excalidraw element. For arrows, use startElementId/endElementId to bind to shapes (auto-routes to edges).',
     inputSchema: {
@@ -427,7 +484,9 @@ export const tools: Tool[] = [
     description: 'Get an AI-readable description of the current canvas: element types, positions, connections, labels, spatial layout, and bounding box. Use this to understand what is on the canvas before making changes.',
     inputSchema: {
       type: 'object',
-      properties: {}
+      properties: {
+        compact: { type: 'boolean', description: 'Token-light structural summary (ids, labels, arrow adjacency). Use this first on scenes you did not draw.' }
+      }
     }
   },
   {

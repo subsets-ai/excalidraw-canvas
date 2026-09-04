@@ -119,6 +119,7 @@ Excalidraw diagrams are visual communication. If text is cut off, elements overl
 
 After each `add` / `apply` / `batch_create_elements`, take a screenshot and check:
 
+0. **Prefer `lint` first** — it catches 1–4 below without a browser; screenshot once at the end.
 1. **Text truncation** — Is all label text fully visible? Truncated text means the shape is too small. Increase `width` and/or `height`.
 2. **Overlap** — Do any shapes share the same space? Background zones must fully contain children with padding.
 3. **Arrow crossing** — Do arrows cut through unrelated elements? If yes, route them around using curved or elbowed arrows (see Arrow Routing below).
@@ -132,6 +133,26 @@ If you find any issue: **stop, fix it, re-screenshot, then continue.** Say "I se
 ---
 
 ## Workflow: Drawing a New Diagram
+
+### Semantic diagrams first: `create_diagram` / `diagram`
+
+For anything with nodes and connections (org charts, flowcharts, architecture), do NOT place elements by hand. One call takes `{nodes, edges, groups}` and computes the layout, box sizes, group zones, colors, and elbow arrows bound to the boxes:
+
+```bash
+echo '{"nodes":[{"id":"ceo","label":"CEO"},{"id":"cto","label":"CTO","group":"eng"}],
+       "edges":[{"from":"ceo","to":"cto"}],
+       "groups":[{"id":"eng","label":"Engineering"}]}' | npx -y mcp-excalidraw-server diagram
+```
+
+MCP: `create_diagram` with the same shape. Node ids become element ids for later `update`/`apply`. Multi-line labels use `\n`. Set `origin` to place beside existing content.
+
+### Verify with `lint`, not screenshots
+
+`lint` (MCP: `lint_scene`) checks geometry without a browser: overlapping shapes, labels overflowing boxes, arrows through unrelated elements, unbound arrows. Loop: draw → `lint` → fix → `lint` → **one** final screenshot for visual sign-off (screenshots need an open browser tab; lint doesn't). On scenes you didn't draw, start with `describe --compact` (MCP: `describe_scene {compact: true}`) — a token-light structural summary — before a full `describe`.
+
+### Elbow arrows
+
+`"elbowed": true` on a bound arrow (`startElementId`/`endElementId`) gets a proper right-angle route computed for you — the org-chart / flowchart connector style. Re-routes when boxes move. Use it by default for hierarchy edges; plain arrows for everything else.
 
 ### Mermaid vs. Direct Creation — Which to Use?
 

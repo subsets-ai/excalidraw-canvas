@@ -1,6 +1,8 @@
 import { CliUsageError } from './args.js';
 import { packageVersion } from '../core/version.js';
 import * as server from './commands/server.js';
+import * as diagramCmd from './commands/diagram.js';
+import * as lintCmd from './commands/lint.js';
 import * as elements from './commands/elements.js';
 import * as scene from './commands/scene.js';
 import { snapshot } from './commands/snapshot.js';
@@ -24,7 +26,9 @@ const COMMANDS: Record<string, Command> = {
   delete: { handler: elements.del, summary: 'Delete elements by id', usage: 'delete <id> [<id> ...]' },
   get: { handler: elements.get, summary: 'Get one element by id', usage: 'get <id>' },
   query: { handler: elements.query, summary: 'Query elements (server + typed client-side filters)', usage: 'query [--type rectangle] [--bbox x0,y0,x1,y1] [--filter locked=true] [--filter-json \'{...}\']' },
-  describe: { handler: scene.describe, summary: 'AI-readable scene description (plain text)', usage: 'describe' },
+  describe: { handler: scene.describe, summary: 'AI-readable scene description (plain text; --compact for a token-light structural summary)', usage: 'describe [--compact]' },
+  lint: { handler: lintCmd.lint, summary: 'Geometric quality checks (overlap, label overflow, arrows through boxes) — no browser needed', usage: 'lint' },
+  diagram: { handler: diagramCmd.diagram, summary: 'Build a laid-out diagram from semantic {nodes, edges, groups} JSON', usage: 'diagram [file|-]' },
   screenshot: { handler: scene.screenshot, summary: 'Capture the canvas (needs an open browser tab)', usage: 'screenshot [--out file.png] [--format png|svg] [--no-background]' },
   export: { handler: scene.exportCmd, summary: 'Export the scene as .excalidraw JSON or Obsidian .excalidraw.md', usage: 'export [--out scene.excalidraw | note.excalidraw.md] [--format json|obsidian] (a .md out path implies obsidian)' },
   import: { handler: scene.importCmd, summary: 'Import a .excalidraw or Obsidian .excalidraw.md file (merge by default)', usage: 'import [scene.excalidraw|note.excalidraw.md|-] [--replace] (or stdin)' },

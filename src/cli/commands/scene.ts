@@ -12,7 +12,7 @@ import {
 } from '../../core/canvas-client.js';
 import { buildSceneFile, importScene } from '../../core/scene-io.js';
 import { wrapSceneAsObsidianMd } from '../../core/obsidian-md.js';
-import { describeScene } from '../../core/describe.js';
+import { describeScene, describeSceneCompact } from '../../core/describe.js';
 import { exportToExcalidrawUrl } from '../../core/share-url.js';
 import { EXPRESS_SERVER_URL } from '../../core/config.js';
 
@@ -22,6 +22,14 @@ async function readTextFileOrStdin(inputPath: string | undefined): Promise<strin
 }
 
 export async function describe(argv: string[]): Promise<void> {
+  if (argv.includes('--compact')) {
+    argv = argv.filter(a => a !== '--compact');
+    const { getElements } = await import('../../core/canvas-client.js');
+    const { ensureCanvasRunning } = await import('../../core/spawn.js');
+    await ensureCanvasRunning();
+    process.stdout.write(describeSceneCompact(await getElements()) + '\n');
+    return;
+  }
   parseArgs(argv, {});
   await ensureCanvasRunning();
   const elements = await getElements();

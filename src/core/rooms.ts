@@ -55,6 +55,55 @@ const SAVE_DEBOUNCE_MS = 300;
 // Tombstones older than this are pruned when a room is loaded from disk
 const TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Server-side mutation stamp: bump version + fresh versionNonce so browsers
+// (which reconcile by version/versionNonce) accept the change.
+export function stampUpdate(el: ServerElement, existing?: ServerElement): ServerElement {
+  el.updatedAt = new Date().toISOString();
+  el.version = (existing?.version ?? el.version ?? 0) + 1;
+  el.versionNonce = Math.floor(Math.random() * 2147483647);
+  return el;
+}
+
+// Excalidraw only drags arrows along with a moved box if the BOX carries a
+// boundElements back-reference to the arrow. Maintain those server-side.
+export function arrowEndpointIds(arrow: ServerElement): string[] {
+  const anyA = arrow as any;
+  return [
+    anyA.start?.id ?? anyA.startBinding?.elementId,
+    anyA.end?.id ?? anyA.endBinding?.elementId
+  ].filter((id: unknown): id is string => typeof id === 'string');
+}
+
+export function attachArrowBackrefs(room: Room, arrow: ServerElement): ServerElement[] {
+  const changed: ServerElement[] = [];
+  if (arrow.type !== 'arrow' && arrow.type !== 'line') return changed;
+  for (const id of arrowEndpointIds(arrow)) {
+    const target = room.elements.get(id);
+    if (!target || target.isDeleted) continue;
+    const bound = Array.isArray(target.boundElements) ? [...target.boundElements] : [];
+    if (bound.some(b => b?.id === arrow.id)) continue;
+    bound.push({ id: arrow.id, type: 'arrow' });
+    (target as any).boundElements = bound;
+    stampUpdate(target, target);
+    changed.push(target);
+  }
+  return changed;
+}
+
+export function detachArrowBackrefs(room: Room, arrow: ServerElement): ServerElement[] {
+  const changed: ServerElement[] = [];
+  if (arrow.type !== 'arrow' && arrow.type !== 'line') return changed;
+  for (const id of arrowEndpointIds(arrow)) {
+    const target = room.elements.get(id);
+    if (!target || target.isDeleted || !Array.isArray(target.boundElements)) continue;
+    if (!target.boundElements.some(b => b?.id === arrow.id)) continue;
+    (target as any).boundElements = target.boundElements.filter(b => b?.id !== arrow.id);
+    stampUpdate(target, target);
+    changed.push(target);
+  }
+  return changed;
+}
+
 const rooms = new Map<string, Room>();
 let dataDir: string | null = null;
 
@@ -107,7 +156,20 @@ function loadRoomFromDisk(id: string): Room | null {
       return Number.isNaN(t) ? true : t > cutoff;
     });
     logger.info(`Room "${id}" loaded from disk (${parsed.elements.length} elements)`);
-    return newRoom(id, parsed);
+    const room = newRoom(id, parsed);
+    // Heal rooms created before back-refs existed: without them, dragging a
+    // box doesn't drag its arrows.
+    let healed = 0;
+    room.elements.forEach(el => {
+      if (!el.isDeleted && (el.type === 'arrow' || el.type === 'line')) {
+        healed += attachArrowBackrefs(room, el).length;
+      }
+    });
+    if (healed > 0) {
+      room.dirty = true;
+      logger.info(`Room "${id}": attached arrow back-refs to ${healed} element(s)`);
+    }
+    return room;
   } catch (error) {
     logger.error(`Failed to load room "${id}" from ${file}:`, error);
     // Don't shadow a corrupt file with an empty room that would then overwrite it

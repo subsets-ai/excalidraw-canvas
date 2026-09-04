@@ -46,9 +46,13 @@ import {
   saveAllRooms,
   roomCount,
   colorFor,
-  publicCollaborator
+  publicCollaborator,
+  stampUpdate,
+  attachArrowBackrefs,
+  detachArrowBackrefs
 } from './core/rooms.js';
 import { splitLabel, attachLabels, boundTextId, makeBoundText } from './core/labels.js';
+import { elbowRoute } from './core/elbow.js';
 
 // Load environment variables
 dotenv.config();
@@ -159,14 +163,6 @@ function randomNonce(): number {
   return Math.floor(Math.random() * 2147483647);
 }
 
-// Server-side mutation stamp: bump version + fresh versionNonce so browsers
-// (which reconcile by version/versionNonce) accept the change.
-function stampUpdate(el: ServerElement, existing?: ServerElement): ServerElement {
-  el.updatedAt = nowIso();
-  el.version = (existing?.version ?? el.version ?? 0) + 1;
-  el.versionNonce = randomNonce();
-  return el;
-}
 
 function filesObject(room: Room): Record<string, ExcalidrawFile> {
   const filesObj: Record<string, ExcalidrawFile> = {};
@@ -553,6 +549,16 @@ function resolveArrowBindings(room: Room, batchElements: ServerElement[]): void 
     const startEl = startRef ? elementMap.get(startRef.id) : undefined;
     const endEl = endRef ? elementMap.get(endRef.id) : undefined;
 
+    // Elbowed + bound: Manhattan-route between the two boxes instead of a
+    // straight segment (this is what "use elbow arrows" should mean)
+    if ((el as any).elbowed && startEl && endEl) {
+      const route = elbowRoute(startEl, endEl);
+      el.x = route.x;
+      el.y = route.y;
+      el.points = route.points;
+      continue;
+    }
+
     const startCenter = startEl
       ? { x: startEl.x + (startEl.width || 0) / 2, y: startEl.y + (startEl.height || 0) / 2 }
       : { x: el.x, y: el.y };
@@ -700,13 +706,14 @@ app.post('/api/elements', (req: Request, res: Response) => {
     }
 
     created.forEach(el => room.elements.set(el.id, el));
+    const backrefs = attachArrowBackrefs(room, element);
     touchRoom(room);
 
-    if (created.length === 1) {
+    if (created.length === 1 && backrefs.length === 0) {
       const message: ElementCreatedMessage = { type: 'element_created', element };
       broadcast(room, message);
     } else {
-      const message: BatchCreatedMessage = { type: 'elements_batch_created', elements: created };
+      const message: BatchCreatedMessage = { type: 'elements_batch_created', elements: [...created, ...backrefs] };
       broadcast(room, message);
     }
     agentPresence(room, req, element);
@@ -810,7 +817,11 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
 
     if (updatedElement.type === 'arrow' || updatedElement.type === 'line') {
       const bindingChanged = ['start', 'end'].some(key => Object.prototype.hasOwnProperty.call(body, key));
-      if (bindingChanged) resolveArrowBindings(room, [updatedElement]);
+      if (bindingChanged) {
+        detachArrowBackrefs(room, existingElement).forEach(el => changed.push(el));
+        resolveArrowBindings(room, [updatedElement]);
+        attachArrowBackrefs(room, updatedElement).forEach(el => changed.push(el));
+      }
     }
 
     room.elements.set(id, updatedElement);
@@ -909,12 +920,16 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
     const textEl = textId ? room.elements.get(textId) : undefined;
     if (textEl && !textEl.isDeleted) removed.push(textEl);
     removed.forEach(el => tombstone(room, el));
+    const detached = detachArrowBackrefs(room, existing);
     touchRoom(room);
 
     for (const el of removed) {
       // Carry the tombstone so browsers reconcile the delete by version
       const message: ElementDeletedMessage & { element: ServerElement } = { type: 'element_deleted', elementId: el.id, element: el };
       broadcast(room, message);
+    }
+    for (const el of detached) {
+      broadcast(room, { type: 'element_updated', element: el } as ElementUpdatedMessage);
     }
     agentPresence(room, req, existing);
 
@@ -1041,14 +1056,18 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     resolveArrowBindings(room, parents);
 
     createdElements.forEach(el => room.elements.set(el.id, el));
+    const backrefs: ServerElement[] = [];
     parents.forEach(p => {
-      if (p.type === 'arrow' || p.type === 'line') recenterBoundText(room, p, []);
+      if (p.type === 'arrow' || p.type === 'line') {
+        recenterBoundText(room, p, []);
+        backrefs.push(...attachArrowBackrefs(room, p));
+      }
     });
     touchRoom(room);
 
     const message: BatchCreatedMessage = {
       type: 'elements_batch_created',
-      elements: createdElements
+      elements: [...createdElements, ...backrefs]
     };
     broadcast(room, message);
     agentPresence(room, req, parents[parents.length - 1]);
