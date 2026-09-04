@@ -10,7 +10,7 @@
 One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y mcp-excalidraw-server <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
-- **MCP Server** — 28 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...). Speaks MCP `2026-07-28` (`server/discover`, per-request `_meta` envelope, tool calls without a handshake) and stays compatible with 2025-era clients that open with `initialize`.
+- **MCP Server** — 30 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...). Speaks MCP `2026-07-28` (`server/discover`, per-request `_meta` envelope, tool calls without a handshake) and stays compatible with 2025-era clients that open with `initialize`.
 - **REST API** — plain HTTP for LangChain and custom frameworks.
 
 Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
@@ -37,7 +37,7 @@ Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Merma
   - [Codex CLI](#codex-cli)
   - [OpenCode](#opencode)
   - [Antigravity (Google)](#antigravity-google)
-- [MCP Tools (28 Total)](#mcp-tools-28-total)
+- [MCP Tools (30 Total)](#mcp-tools-30-total)
 - [Quick Start (From Source / Docker)](#quick-start-from-source--docker)
 - [Testing](#testing)
 - [FAQ](#faq)
@@ -63,7 +63,7 @@ Excalidraw has an [official MCP](https://github.com/excalidraw/excalidraw-mcp) �
 
 | | Official Excalidraw MCP | This Project |
 |---|---|---|
-| **Approach** | Prompt in, diagram out (one-shot widget) | Programmatic element-level control (CLI + 28 MCP tools) |
+| **Approach** | Prompt in, diagram out (one-shot widget) | Programmatic element-level control (CLI + 30 MCP tools) |
 | **State** | Checkpoints inside the chat widget | Persistent live canvas with real-time sync |
 | **Element CRUD** | Declarative re-send with delete markers | Full create / read / update / delete per element |
 | **AI sees the canvas** | No | `describe` (structured text) + `screenshot` (image) |
@@ -217,7 +217,9 @@ Conventions: JSON results on stdout — except `describe` (plain text by design)
 | `get <id>` / `delete <id...>` | Read / remove elements |
 | `update <id> --set '{...}'` | Update an element |
 | `query` | `--type`, `--bbox x0,y0,x1,y1`, `--filter k=v` (typed, nested keys), `--filter-json '{...}'` |
-| `describe` | AI-readable scene summary (plain text) |
+| `describe` | AI-readable scene summary (plain text; `--compact` for a token-light structural view) |
+| `diagram [file\|-]` | Semantic `{nodes, edges, groups}` → laid-out diagram (tidy tree, zones, elbow arrows) |
+| `lint` | Geometric quality checks: overlap, label overflow, arrows through boxes, unbound arrows |
 | `screenshot` | `--out f.png`, `--format png\|svg`, `--no-background` (browser tab required) |
 | `export [--out f.excalidraw] [--format json\|obsidian]` / `import [file\|-] [--replace]` | Scene file I/O — a `.md` out path writes Obsidian's `.excalidraw.md` format; `import` reads it back |
 | `mermaid [file\|-]` | Mermaid → canvas (browser tab required) |
@@ -437,7 +439,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 - **Docker networking**: Use `host.docker.internal` to reach the canvas server running on your host machine. On Linux, you may need `--add-host=host.docker.internal:host-gateway` or use `172.17.0.1`. The Docker MCP image sets `EXCALIDRAW_NO_AUTOSTART=1` (it has no frontend build) — run the canvas as its own container.
 - **Storage**: The canvas server keeps rooms in memory unless `DATA_DIR` is set, in which case each room is persisted to `DATA_DIR/rooms/<room>.json`. Without it, restarting clears all elements — use `export` / `snapshot`.
 
-## MCP Tools (28 Total)
+## MCP Tools (30 Total)
 
 | Category | Tools |
 |---|---|
@@ -446,6 +448,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 | **Scene Awareness** | `describe_scene`, `get_canvas_screenshot` |
 | **File I/O** | `export_scene`, `import_scene`, `export_to_image`, `export_to_excalidraw_url`, `create_from_mermaid` |
 | **Rooms** | `use_room` (switch/create — name it after the ticket, e.g. `pro-2050`), `list_rooms` |
+| **Semantic** | `create_diagram` (nodes/edges/groups → laid-out chart with elbow arrows), `lint_scene` (geometry checks, no browser) |
 | **State Management** | `clear_canvas`, `snapshot_scene`, `restore_snapshot` |
 | **Viewport** | `set_viewport` |
 | **Design Guide** | `read_diagram_guide` |

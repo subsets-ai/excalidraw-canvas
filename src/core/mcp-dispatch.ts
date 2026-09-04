@@ -38,10 +38,12 @@ import {
 } from './geometry.js';
 import { buildSceneFile, importScene } from './scene-io.js';
 import { wrapSceneAsObsidianMd } from './obsidian-md.js';
-import { describeScene } from './describe.js';
+import { describeScene, describeSceneCompact } from './describe.js';
 import { exportToExcalidrawUrl } from './share-url.js';
 import { DIAGRAM_DESIGN_GUIDE } from './design-guide.js';
 import { sceneState, ensureCanvasReadyForMcpTool, toolNeedsCanvasBeforeDispatch } from './canvas-state.js';
+import { buildDiagram } from './diagram-layout.js';
+import { lintScene } from './lint.js';
 
 // Points schema: accept both {x, y} objects and [x, y] tuples
 const PointObjectSchema = z.object({ x: z.number(), y: z.number() });
@@ -644,12 +646,38 @@ export async function callExcalidrawTool(
         };
       }
       case 'describe_scene': {
-        logger.info('Describing scene via MCP');
+        const params = z.object({ compact: z.boolean().optional() }).parse(args ?? {});
+        logger.info('Describing scene via MCP', { compact: !!params.compact });
 
         const allElements = await getElements();
 
         return {
-          content: [{ type: 'text', text: describeScene(allElements) }]
+          content: [{ type: 'text', text: params.compact ? describeSceneCompact(allElements) : describeScene(allElements) }]
+        };
+      }
+
+      case 'lint_scene': {
+        const warnings = lintScene(await getElements());
+        return {
+          content: [{
+            type: 'text',
+            text: warnings.length === 0
+              ? 'No geometry issues found (overlap, label overflow, arrow routing, bindings all clean).'
+              : `${warnings.length} issue(s):\n` + warnings.map(w => `- [${w.kind}] ${w.message}`).join('\n')
+          }]
+        };
+      }
+
+      case 'create_diagram': {
+        const diagram = buildDiagram(args as any);
+        const created = await batchCreateElementsOnCanvas(diagram.map(el => prepareElement(el as any)));
+        if (!created) throw new Error('Failed to create diagram: canvas unavailable');
+        logger.info('Diagram created via MCP', { elements: created.length });
+        return {
+          content: [{
+            type: 'text',
+            text: `Diagram created: ${created.length} elements (${(args as any)?.nodes?.length ?? 0} nodes, ${(args as any)?.edges?.length ?? 0} edges). Node ids are element ids for later updates. Take a screenshot to verify.`
+          }]
         };
       }
       case 'get_canvas_screenshot': {

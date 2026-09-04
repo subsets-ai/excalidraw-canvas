@@ -326,6 +326,36 @@ try {
   r = await api('zorder', '/api/elements');
   eq(r.body.elements.map(e => e.id), ['z-second-inserted', 'z-first-inserted', 'z-no-index'], 'elements listed in index order, index-less last');
 
+  // ---- elbow routing, semantic diagrams, lint
+  console.log('diagram tools');
+  await api('draw', '/api/elements/batch', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'top', type: 'rectangle', x: 300, y: 0, width: 200, height: 80 },
+    { id: 'kid', type: 'rectangle', x: 0, y: 300, width: 200, height: 80 },
+    { id: 'el1', type: 'arrow', x: 0, y: 0, elbowed: true, start: { id: 'top' }, end: { id: 'kid' } }
+  ] }) });
+  r = await api('draw', '/api/elements/el1');
+  check((r.body.element.points || []).length === 4, `elbowed bound arrow gets a Manhattan route (${JSON.stringify(r.body.element.points)})`);
+  const dg = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'dgm', 'diagram', '-'], {
+    env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8',
+    input: JSON.stringify({
+      nodes: [ { id: 'a', label: 'Boss' }, { id: 'b', label: 'Kid One', group: 'g' }, { id: 'c', label: 'Kid Two', group: 'g' } ],
+      edges: [ { from: 'a', to: 'b' }, { from: 'a', to: 'c' } ],
+      groups: [ { id: 'g', label: 'Team' } ]
+    })
+  });
+  const dgOut = dg.status === 0 ? JSON.parse(dg.stdout) : {};
+  eq(dgOut.created, 7, `diagram builds zone+title+3 nodes+2 arrows ${dg.stderr.trim().slice(0, 120)}`);
+  r = await api('dgm', '/api/elements/b');
+  check(r.body.element && r.body.element.y > (await api('dgm', '/api/elements/a')).body.element.y, 'diagram layers children below parents');
+  const lint = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'dgm', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  eq(JSON.parse(lint.stdout).count, 0, 'generated diagram lints clean');
+  await api('lintbad', '/api/elements/batch', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'o1', type: 'rectangle', x: 0, y: 0, width: 100, height: 60 },
+    { id: 'o2', type: 'rectangle', x: 50, y: 20, width: 100, height: 60 }
+  ] }) });
+  const lint2 = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'lintbad', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  check(JSON.parse(lint2.stdout).warnings.some(w => w.kind === 'overlap'), 'lint flags overlap');
+
   // ---- persistence across restart
   console.log('persistence');
   await new Promise(r => setTimeout(r, 500)); // let the debounced save land

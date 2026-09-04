@@ -1,5 +1,45 @@
 import { ServerElement } from '../types.js';
 
+// Compact mode: a token-light structural summary — what's there and how it
+// connects — for orienting on big scenes before targeted queries. Bound
+// label text elements are folded into their containers.
+export function describeSceneCompact(allElements: ServerElement[]): string {
+  if (allElements.length === 0) return 'The canvas is empty.';
+  const byId = new Map(allElements.map(el => [el.id, el]));
+  const boundTextIds = new Set<string>();
+  for (const el of allElements) {
+    if (el.type === 'text' && (el as any).containerId) boundTextIds.add(el.id);
+  }
+  const lines: string[] = [];
+  const clip = (t: string): string => {
+    const one = t.replace(/\n/g, ' / ');
+    return one.length > 48 ? one.slice(0, 45) + '…' : one;
+  };
+  const shapes = allElements.filter(el => el.type !== 'arrow' && !boundTextIds.has(el.id));
+  lines.push(`${allElements.length} elements (${shapes.length} shapes/text, ${allElements.filter(e => e.type === 'arrow').length} arrows)`);
+  lines.push('');
+  for (const el of shapes) {
+    const label = (el as any).label?.text ?? (el.type === 'text' ? el.text : undefined);
+    lines.push(`[${el.id}] ${el.type} (${Math.round(el.x)},${Math.round(el.y)}) ${Math.round(el.width ?? 0)}x${Math.round(el.height ?? 0)}${label ? ` "${clip(label)}"` : ''}`);
+  }
+  const arrows = allElements.filter(el => el.type === 'arrow');
+  if (arrows.length > 0) {
+    lines.push('');
+    lines.push('arrows:');
+    for (const a of arrows) {
+      const anyA = a as any;
+      const from = anyA.startBinding?.elementId ?? anyA.start?.id;
+      const to = anyA.endBinding?.elementId ?? anyA.end?.id;
+      const kind = anyA.elbowed ? 'elbow' : 'straight';
+      const bound = from || to ? `${from ?? '?'} -> ${to ?? '?'}` : `UNBOUND at (${Math.round(a.x)},${Math.round(a.y)})`;
+      const fromEl = from ? byId.get(from) : undefined;
+      void fromEl;
+      lines.push(`[${a.id}] ${bound} (${kind})`);
+    }
+  }
+  return lines.join('\n');
+}
+
 // Build an AI-readable description of the current canvas: element types,
 // positions, connections, labels, spatial layout, and bounding box.
 export function describeScene(allElements: ServerElement[]): string {

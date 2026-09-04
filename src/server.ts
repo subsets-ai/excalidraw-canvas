@@ -49,6 +49,7 @@ import {
   publicCollaborator
 } from './core/rooms.js';
 import { splitLabel, attachLabels, boundTextId, makeBoundText } from './core/labels.js';
+import { elbowRoute } from './core/elbow.js';
 
 // Load environment variables
 dotenv.config();
@@ -552,6 +553,16 @@ function resolveArrowBindings(room: Room, batchElements: ServerElement[]): void 
 
     const startEl = startRef ? elementMap.get(startRef.id) : undefined;
     const endEl = endRef ? elementMap.get(endRef.id) : undefined;
+
+    // Elbowed + bound: Manhattan-route between the two boxes instead of a
+    // straight segment (this is what "use elbow arrows" should mean)
+    if ((el as any).elbowed && startEl && endEl) {
+      const route = elbowRoute(startEl, endEl);
+      el.x = route.x;
+      el.y = route.y;
+      el.points = route.points;
+      continue;
+    }
 
     const startCenter = startEl
       ? { x: startEl.x + (startEl.width || 0) / 2, y: startEl.y + (startEl.height || 0) / 2 }
