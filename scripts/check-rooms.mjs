@@ -335,6 +335,17 @@ try {
   ] }) });
   r = await api('draw', '/api/elements/el1');
   check((r.body.element.points || []).length === 4, `elbowed bound arrow gets a Manhattan route (${JSON.stringify(r.body.element.points)})`);
+  // endpoints carry boundElements back-refs so the browser drags arrows along
+  r = await api('draw', '/api/elements/top');
+  check((r.body.element.boundElements || []).some(b => b.id === 'el1'), 'endpoint box gets boundElements back-ref');
+  await api('draw', '/api/elements/el1', { method: 'DELETE' });
+  r = await api('draw', '/api/elements/top');
+  check(!(r.body.element.boundElements || []).some(b => b.id === 'el1'), 'back-ref removed when arrow deleted');
+  await api('draw', '/api/elements/batch', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'el2', type: 'arrow', x: 0, y: 0, elbowed: true, start: { id: 'top' }, end: { id: 'kid' } }
+  ] }) });
+  r = await api('draw', '/api/elements/kid');
+  check((r.body.element.boundElements || []).some(b => b.id === 'el2'), 'batch-created arrow attaches back-refs too');
   const dg = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'dgm', 'diagram', '-'], {
     env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8',
     input: JSON.stringify({
