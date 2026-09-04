@@ -367,6 +367,16 @@ try {
   const lint2 = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'lintbad', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
   check(JSON.parse(lint2.stdout).warnings.some(w => w.kind === 'overlap'), 'lint flags overlap');
 
+  // diagonal elbow: no mid-row crossing — route via a gutter at the target
+  await api('diag2', '/api/elements/batch', { method: 'POST', body: JSON.stringify({ elements: [
+    { id: 'src', type: 'rectangle', x: 0, y: 0, width: 200, height: 80 },
+    { id: 'between', type: 'rectangle', x: 600, y: 200, width: 200, height: 80 },
+    { id: 'tgt', type: 'rectangle', x: 600, y: 400, width: 200, height: 80 },
+    { id: 'dg', type: 'arrow', x: 0, y: 0, elbowed: true, start: { id: 'src' }, end: { id: 'tgt' } }
+  ] }) });
+  const dlint = spawnSync(process.execPath, [binPath, '--url', base, '--room', 'diag2', 'lint'], { env: { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1' }, encoding: 'utf-8' });
+  check(!JSON.parse(dlint.stdout).warnings.some(w => w.kind === 'arrow-through-box'), 'diagonal elbow avoids boxes between rows');
+
   // ---- persistence across restart
   console.log('persistence');
   await new Promise(r => setTimeout(r, 500)); // let the debounced save land
